@@ -31,7 +31,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install fear-and-greed
 
       - name: Install IDAES solvers (Bonmin)
         run: |
@@ -40,6 +39,8 @@ jobs:
           echo "$HOME/.idaes/bin" >> $GITHUB_PATH
 
       - name: Run daily portfolio optimization
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: python portfolio.py
 
       - name: Commit results back to repository
