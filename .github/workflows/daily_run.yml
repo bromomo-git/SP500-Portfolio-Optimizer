@@ -38,6 +38,21 @@ jobs:
           idaes get-extensions --to ~/.idaes/bin
           echo "$HOME/.idaes/bin" >> $GITHUB_PATH
 
+      - name: Debug FMP API connection
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: |
+          python3 -c "
+import requests, os
+key = os.environ.get('FMP_API_KEY', 'NOT SET')
+print(f'Key length: {len(key)} chars')
+print(f'Key starts with: {key[:8]}...')
+url = f'https://financialmodelingprep.com/api/v3/historical-price-full/AAPL?from=2026-04-01&to=2026-05-01&apikey={key}'
+resp = requests.get(url, timeout=15)
+print(f'HTTP status: {resp.status_code}')
+print(f'Response (first 500 chars): {resp.text[:500]}')
+"
+
       - name: Run daily portfolio optimization
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
