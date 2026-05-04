@@ -2,7 +2,7 @@
 SP500 Portfolio Optimizer — Daily Production Script
 ====================================================
 Runs automatically via GitHub Actions every trading day at 3:55 PM ET.
-
+ 
 Full pipeline per run:
   1.  Load portfolio state (cash, positions, NAV history)
   2.  Check if today is a US trading day — exit cleanly if not
@@ -19,20 +19,20 @@ Full pipeline per run:
   13. Append row to results/performance_log.csv
   14. Update data/portfolio_state.json
   15. Regenerate dashboard/index.html with all charts
-
+ 
 Files read/written:
   data/portfolio_state.json     — persistent portfolio state
   results/performance_log.csv   — daily performance log (append-only)
   dashboard/index.html          — live dashboard (overwritten daily)
 """
-
+ 
 import os
 import json
 import sys
 import warnings
 import urllib.request
 from datetime import datetime, date, timedelta
-
+ 
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -40,21 +40,21 @@ import matplotlib
 matplotlib.use('Agg')          # headless — no display needed in CI
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-
+ 
 from pyomo.environ import (
     ConcreteModel, Var, Objective, Constraint, ConstraintList,
     NonNegativeReals, Binary, maximize, value, SolverFactory
 )
 from pyomo.opt import TerminationCondition
 from sklearn.covariance import LedoitWolf
-
+ 
 warnings.filterwarnings('ignore')
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  CONFIGURATION  (mirrors Cell 2 of the Colab notebook)
 # ══════════════════════════════════════════════════════════════
-
+ 
 STARTING_CAPITAL   = 1_000_000.00
 LOOKBACK           = 45       # rolling window for filter + estimation
 TOP_N              = 100      # stocks passed to optimizer each day
@@ -65,7 +65,7 @@ WEIGHT_MAX         = 0.50     # 50% cap  — linking constraint maximum
 N_SWEEP            = 6        # frontier points per day
 FRONTIER_TIMELIMIT = 60       # seconds per individual frontier solve
 SLIPPAGE_PCT       = 0.0001   # 0.01% of traded value, one-way
-
+ 
 TARGET_SECTORS = [
     'Information Technology',
     'Health Care',
@@ -87,53 +87,85 @@ SECTOR_COLOURS = {
     'Energy':     '#FF9800',
     'Industrials': '#4CAF50',
 }
-
+ 
 STATE_FILE = 'data/portfolio_state.json'
 LOG_FILE   = 'results/performance_log.csv'
 DASHBOARD  = 'docs/index.html'
-
+ 
 BONMIN_PATH = os.path.expanduser('~/.idaes/bin/bonmin')
 if not os.path.exists(BONMIN_PATH):
     BONMIN_PATH = 'bonmin'
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  UTILITIES
 # ══════════════════════════════════════════════════════════════
-
+ 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
-
-
+ 
+ 
 def is_trading_day(check_date=None):
+    """
+    Returns True if check_date is a US equity market trading day.
+    Safe date construction — never raises ValueError for invalid days.
+    """
     if check_date is None:
         check_date = date.today()
+ 
+    # Weekend check
     if check_date.weekday() >= 5:
         return False
+ 
     year = check_date.year
-    holidays = {date(year, 1, 1), date(year, 7, 4), date(year, 12, 25)}
-    for month, nth, weekday in [(1, 3, 0), (2, 3, 0)]:
-        days = [date(year, month, d) for d in range(1, 32)
-                if d <= 28 or (month != 2) and date(year, month, d).weekday() == weekday]
-        mons = [d for d in range(1, 32)
-                if date(year, month, d).weekday() == weekday]
-        if len(mons) >= nth:
-            holidays.add(date(year, month, mons[nth - 1]))
-    may_mons = [d for d in range(1, 32)
-                if date(year, 5, d).weekday() == 0]
+ 
+    def safe_dates(month, weekday):
+        """Return all valid dates in (year, month) whose weekday matches."""
+        result = []
+        for d in range(1, 32):
+            try:
+                dt = date(year, month, d)
+                if dt.weekday() == weekday:
+                    result.append(dt)
+            except ValueError:
+                continue   # skip invalid days (e.g. Feb 29 in non-leap year)
+        return result
+ 
+    holidays = set()
+ 
+    # Fixed holidays
+    holidays.add(date(year, 1, 1))    # New Year's Day
+    holidays.add(date(year, 7, 4))    # Independence Day
+    holidays.add(date(year, 12, 25))  # Christmas Day
+ 
+    # MLK Day — 3rd Monday of January
+    jan_mons = safe_dates(1, 0)
+    if len(jan_mons) >= 3:
+        holidays.add(jan_mons[2])
+ 
+    # Presidents Day — 3rd Monday of February
+    feb_mons = safe_dates(2, 0)
+    if len(feb_mons) >= 3:
+        holidays.add(feb_mons[2])
+ 
+    # Memorial Day — last Monday of May
+    may_mons = safe_dates(5, 0)
     if may_mons:
-        holidays.add(date(year, 5, may_mons[-1]))
-    sep_mons = [d for d in range(1, 31)
-                if date(year, 9, d).weekday() == 0]
+        holidays.add(may_mons[-1])
+ 
+    # Labor Day — first Monday of September
+    sep_mons = safe_dates(9, 0)
     if sep_mons:
-        holidays.add(date(year, 9, sep_mons[0]))
-    nov_thus = [d for d in range(1, 31)
-                if date(year, 11, d).weekday() == 3]
+        holidays.add(sep_mons[0])
+ 
+    # Thanksgiving — 4th Thursday of November
+    nov_thus = safe_dates(11, 3)
     if len(nov_thus) >= 4:
-        holidays.add(date(year, 11, nov_thus[3]))
+        holidays.add(nov_thus[3])
+ 
     return check_date not in holidays
-
-
+ 
+ 
 def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
@@ -146,27 +178,27 @@ def load_state():
         "last_run": None, "prev_weights": {},
         "nav_history": [], "trade_history": [],
     }
-
-
+ 
+ 
 def save_state(state):
     os.makedirs('data', exist_ok=True)
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f, indent=2, default=str)
     log("Portfolio state saved.")
-
-
+ 
+ 
 def append_log(row):
     os.makedirs('results', exist_ok=True)
     write_header = not os.path.exists(LOG_FILE)
     pd.DataFrame([row]).to_csv(LOG_FILE, mode='a',
                                header=write_header, index=False)
     log("Performance log updated.")
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  UNIVERSE  (mirrors Cell 3)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def build_universe():
     log("Scraping S&P 500 universe from Wikipedia ...")
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
@@ -188,12 +220,12 @@ def build_universe():
     all_tickers   = universe['Ticker'].tolist()
     log(f"Universe: {len(all_tickers)} stocks across {len(TARGET_SECTORS)} sectors")
     return all_tickers, ticker_sector
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  DATA DOWNLOAD  (mirrors Cell 4)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def download_data(all_tickers, ticker_sector):
     start = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
     end   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -219,12 +251,12 @@ def download_data(all_tickers, ticker_sector):
     log(f"Download complete — {len(daily_ret)} trading days, {len(all_tickers)} stocks")
     return (close_px, open_px, volume_px, daily_ret,
             spy_close, vix_close, all_tickers, ticker_sector)
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  DAILY FILTER  (mirrors Cell 5)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def daily_filter(daily_ret, volume_px, ticker_sector, day_idx):
     if day_idx < LOOKBACK:
         return [], {}
@@ -247,12 +279,12 @@ def daily_filter(daily_ret, volume_px, ticker_sector, day_idx):
     top_tickers = score.nlargest(TOP_N).index.tolist()
     top_sectors = {t: ticker_sector[t] for t in top_tickers}
     return top_tickers, top_sectors
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  OPTIMIZER  (mirrors Cell 6)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def estimate_params(daily_ret, tickers, day_idx):
     window   = daily_ret[tickers].iloc[day_idx - LOOKBACK: day_idx].copy()
     window   = window.fillna(window.mean())
@@ -260,8 +292,8 @@ def estimate_params(daily_ret, tickers, day_idx):
     lw       = LedoitWolf().fit(window.values)
     cov_df   = pd.DataFrame(lw.covariance_, index=tickers, columns=tickers)
     return mean_ret, cov_df
-
-
+ 
+ 
 def solve_portfolio(mean_ret, cov_matrix, sector_map,
                     risk_limit, warm_start=None):
     tickers     = mean_ret.index.tolist()
@@ -308,8 +340,8 @@ def solve_portfolio(mean_ret, cov_matrix, sector_map,
         ret = sum(w[t] * float(mean_ret[t]) for t in tickers)
         return w, ret
     return None, None
-
-
+ 
+ 
 def find_optimal_portfolio(mean_ret, cov_matrix, sector_map,
                             risk_multiplier=1.0, warm_start=None):
     tickers   = mean_ret.index.tolist()
@@ -348,12 +380,12 @@ def find_optimal_portfolio(mean_ret, cov_matrix, sector_map,
             best_ret     = port_ret
             best_risk    = port_var
     return best_weights, best_ret, best_sharpe, best_risk, frontier
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  FEAR & GREED  (mirrors Cell 13)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def get_fear_greed(vix_series=None):
     def score_to_label_mult(s):
         if   s <= 24: return 'Extreme Fear',  0.50
@@ -382,12 +414,12 @@ def get_fear_greed(vix_series=None):
         return score, label, mult
     log("No sentiment data — using neutral (50)")
     return 50, 'Neutral', 1.00
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  GOLDEN CROSS  (mirrors Cell 12)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def run_golden_cross(spy_close, perf_df, starting_capital):
     start_long = (date.today() - timedelta(days=320)).strftime('%Y-%m-%d')
     end_long   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
@@ -413,12 +445,12 @@ def run_golden_cross(spy_close, perf_df, starting_capital):
     gc_series = pd.Series(gc_nav[1:], index=perf_idx)
     log(f"Golden Cross regime today: {gc_regime[-1] if gc_regime else 'N/A'}")
     return gc_series, gc_regime, spy_q2, ma50, ma200
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  METRICS HELPER
 # ══════════════════════════════════════════════════════════════
-
+ 
 def compute_metrics(nav_series, label, starting_capital):
     r      = nav_series.pct_change().fillna(0)
     total  = nav_series.iloc[-1] / starting_capital - 1
@@ -439,30 +471,30 @@ def compute_metrics(nav_series, label, starting_capital):
         'Max Drawdown': f'{dd:.2%}',
         'Win Rate':     f'{win_r:.1%}',
     }
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  DASHBOARD GENERATOR  (mirrors Cells 9 + 12 + 13)
 # ══════════════════════════════════════════════════════════════
-
+ 
 def build_dashboard(perf_df, today_str, frontier_data,
                     best_sharpe, fg_score, fg_label, fg_mult,
                     spy_close, gc_series, gc_regime, vix_series):
     os.makedirs('docs', exist_ok=True)
-
+ 
     dates   = perf_df['Date'].astype(str).tolist()
     navs    = perf_df['NAV'].tolist()
     pnls    = perf_df['Daily_PnL'].tolist()
     returns = (perf_df['Daily_Return'] * 100).round(4).tolist()
     sharpes = perf_df['Selected_Sharpe'].tolist()
-
+ 
     spy_aligned = spy_close.reindex(pd.to_datetime(perf_df['Date'])).ffill()
     spy_rb = []
     if len(spy_aligned) > 0 and spy_aligned.iloc[0] > 0:
         spy_rb = (spy_aligned / spy_aligned.iloc[0] * STARTING_CAPITAL).round(2).tolist()
-
+ 
     gc_navs = gc_series.round(2).tolist() if gc_series is not None and len(gc_series) > 0 else []
-
+ 
     vix_fg, mult_hist = [], []
     if vix_series is not None:
         vix_q2 = vix_series.reindex(pd.to_datetime(perf_df['Date'])).ffill()
@@ -475,27 +507,27 @@ def build_dashboard(perf_df, today_str, frontier_data,
         vix_fg    = vix_q2.apply(vix_to_fg).tolist()
         mult_hist = [0.50 if s<=24 else 0.75 if s<=44 else 1.00 if s<=55 else 1.25 if s<=74 else 1.50
                      for s in vix_fg]
-
+ 
     f_risks   = [round(p['Port_Std'] * 100, 4) for p in frontier_data]
     f_returns = [round(p['Ann_Return'] * 100, 4) for p in frontier_data]
     best_idx  = (max(range(len(frontier_data)), key=lambda i: frontier_data[i]['Sharpe'])
                  if frontier_data else 0)
     b_risk    = f_risks[best_idx]   if frontier_data else 0
     b_ret     = f_returns[best_idx] if frontier_data else 0
-
+ 
     total_ret = (navs[-1] / STARTING_CAPITAL - 1) * 100 if navs else 0
     total_pnl = navs[-1] - STARTING_CAPITAL if navs else 0
     n_days    = len(navs)
     win_rate  = sum(1 for p in pnls if p > 0) / n_days * 100 if n_days > 0 else 0
-
+ 
     fg_colour = {
         'Extreme Fear': '#EF5350', 'Fear': '#FF7043',
         'Neutral': '#90A4AE', 'Greed': '#66BB6A',
         'Extreme Greed': '#43A047'
     }.get(fg_label, '#90A4AE')
-
+ 
     import json as _json
-
+ 
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -649,37 +681,37 @@ new Chart(document.getElementById('frontierChart'),{{type:'scatter',
 </script>
 </body>
 </html>"""
-
+ 
     with open(DASHBOARD, 'w') as f:
         f.write(html)
     log(f"Dashboard written → {DASHBOARD}")
-
-
+ 
+ 
 # ══════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════
-
+ 
 def main():
     today = date.today()
     log("=" * 56)
     log(f"SP500 Portfolio Optimizer — {today}")
     log("=" * 56)
-
+ 
     if not is_trading_day(today):
         log(f"{today} is not a US trading day — exiting cleanly.")
         sys.exit(0)
-
+ 
     state = load_state()
     if state.get('last_run') == str(today):
         log(f"Already ran today ({today}) — exiting.")
         sys.exit(0)
-
+ 
     all_tickers, ticker_sector = build_universe()
-
+ 
     (close_px, open_px, volume_px, daily_ret,
      spy_close, vix_close, all_tickers,
      ticker_sector) = download_data(all_tickers, ticker_sector)
-
+ 
     today_ts = pd.Timestamp(today)
     all_days = daily_ret.index
     if today_ts in all_days:
@@ -687,11 +719,11 @@ def main():
     else:
         day_idx = len(all_days) - 1
         log(f"Using most recent available day: {all_days[day_idx].date()}")
-
+ 
     if day_idx < LOOKBACK:
         log(f"Only {day_idx} days of history — need {LOOKBACK}. Exiting.")
         sys.exit(0)
-
+ 
     log(f"Running daily filter (top {TOP_N}) ...")
     top_tickers, top_sec_map = daily_filter(
         daily_ret, volume_px, ticker_sector, day_idx
@@ -700,13 +732,13 @@ def main():
         log(f"Filter returned only {len(top_tickers)} stocks. Exiting.")
         sys.exit(1)
     log(f"Filter: {len(top_tickers)} stocks passed to optimizer")
-
+ 
     log("Estimating parameters (Ledoit-Wolf) ...")
     mean_r, cov_m = estimate_params(daily_ret, top_tickers, day_idx)
-
+ 
     fg_score, fg_label, fg_mult = get_fear_greed(vix_close)
     log(f"Sentiment: {fg_label} ({fg_score}) → multiplier {fg_mult:.2f}x")
-
+ 
     log(f"Frontier sweep ({N_SWEEP} solves, multiplier={fg_mult:.2f}x) ...")
     prev_w   = state.get('prev_weights', {})
     warm     = {t: prev_w.get(t, 0.0) for t in top_tickers}
@@ -714,7 +746,7 @@ def main():
         mean_r, cov_m, top_sec_map,
         risk_multiplier=fg_mult, warm_start=warm
     )
-
+ 
     if weights is None:
         log("All frontier solves infeasible — carrying previous weights.")
         weights     = {t: prev_w.get(t, 0.0) for t in top_tickers}
@@ -724,36 +756,36 @@ def main():
         est_ret     = 0.0
         best_sharpe = 0.0
         frontier    = []
-
+ 
     held = [t for t, w in weights.items() if w > 1e-4]
     log(f"Selected {len(held)} stocks | Sharpe {best_sharpe:.3f}")
-
+ 
     exec_day = today_ts if today_ts in open_px.index else open_px.index[-1]
     op = open_px.loc[exec_day]
     cp = close_px.loc[exec_day]
-
+ 
     positions = {t: state['positions'].get(t, 0.0) for t in all_tickers}
     cash      = float(state['cash'])
-
+ 
     equity_open = sum(positions.get(t, 0.0) * float(op.get(t, 0))
                       for t in all_tickers)
     nav_open = cash + equity_open
     log(f"NAV at open: ${nav_open:,.2f}")
-
+ 
     target_dollars  = {t: weights.get(t, 0.0) * nav_open for t in top_tickers}
     current_dollars = {t: positions.get(t, 0.0) * float(op.get(t, 0))
                        for t in all_tickers}
     for t in all_tickers:
         if t not in target_dollars and positions.get(t, 0.0) > 1e-6:
             target_dollars[t] = 0.0
-
+ 
     day_slippage = 0.0
     day_turnover = 0.0
     trades_today = []
     all_trade_t  = set(target_dollars.keys()) | {
         t for t in all_tickers if positions.get(t, 0.0) > 1e-6
     }
-
+ 
     for t in all_trade_t:
         delta = target_dollars.get(t, 0.0) - current_dollars.get(t, 0.0)
         if abs(delta) < 1.0:
@@ -776,15 +808,15 @@ def main():
             'dollars': round(delta, 2), 'shares': round(shares, 6),
             'slippage': round(slip_cost, 4),
         })
-
+ 
     eod_equity    = sum(positions.get(t, 0.0) * float(cp.get(t, 0))
                         for t in all_tickers)
     eod_nav       = cash + eod_equity
     daily_pnl     = eod_nav - nav_open
     daily_ret_val = daily_pnl / nav_open if nav_open > 0 else 0
-
+ 
     log(f"EOD NAV: ${eod_nav:,.2f} | P&L: ${daily_pnl:+,.2f} ({daily_ret_val:+.4%})")
-
+ 
     append_log({
         'Date':            str(today),
         'NAV':             round(eod_nav, 2),
@@ -798,7 +830,7 @@ def main():
         'FG_Multiplier':   fg_mult,
         'Held_Tickers':    ','.join(held),
     })
-
+ 
     state['nav_history'].append({
         'date': str(today), 'nav': round(eod_nav, 2),
         'pnl':  round(daily_pnl, 2)
@@ -810,7 +842,7 @@ def main():
     state['prev_weights'] = weights
     state['trade_history'].extend(trades_today)
     save_state(state)
-
+ 
     log("Running Golden Cross comparative simulation ...")
     perf_df = pd.read_csv(LOG_FILE)
     gc_series, gc_regime = None, []
@@ -820,7 +852,7 @@ def main():
         )
     except Exception as e:
         log(f"Golden Cross failed: {e} — skipping")
-
+ 
     if gc_series is not None and len(perf_df) > 1:
         spy_aligned = spy_close.reindex(
             pd.to_datetime(perf_df['Date'])
@@ -835,7 +867,7 @@ def main():
         ])
         log("COMPARATIVE ANALYSIS")
         print(metrics.to_string(index=False))
-
+ 
     log("Rebuilding live dashboard ...")
     build_dashboard(
         perf_df=perf_df, today_str=str(today),
@@ -844,11 +876,11 @@ def main():
         spy_close=spy_close, gc_series=gc_series,
         gc_regime=gc_regime, vix_series=vix_close,
     )
-
+ 
     log("=" * 56)
     log(f"Run complete — {today}  NAV ${eod_nav:,.2f}")
     log("=" * 56)
-
-
+ 
+ 
 if __name__ == '__main__':
     main()
