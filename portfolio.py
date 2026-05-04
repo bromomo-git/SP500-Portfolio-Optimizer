@@ -267,6 +267,13 @@ def download_data(all_tickers, ticker_sector):
         if i % 50 == 0:
             log(f"  Progress: {i}/{len(fetch)} "
                 f"({len(all_close)} tickers downloaded)")
+
+        # Tiingo free tier: 50 requests/minute hard limit
+        # Pause 65 seconds every 45 tickers to stay safely under the limit
+        if i > 0 and i % 45 == 0:
+            log(f"  Rate limit pause (45 tickers done) — waiting 65 seconds ...")
+            _time.sleep(65)
+
         try:
             url  = (f"{BASE_URL}/{ticker}/prices"
                     f"?startDate={start_str}&endDate={end_str}"
@@ -296,20 +303,45 @@ def download_data(all_tickers, ticker_sector):
                             elif dst == 'Volume':
                                 all_volume[ticker] = df[src].rename(ticker)
 
+            elif resp.status_code == 429:
+                # Hit rate limit mid-batch — wait 70 seconds and retry once
+                log(f"  {ticker}: rate limit hit — waiting 70s then retrying")
+                _time.sleep(70)
+                try:
+                    resp2 = _requests.get(url, headers=HEADERS, timeout=15)
+                    if resp2.status_code == 200:
+                        data = resp2.json()
+                        if data:
+                            df = pd.DataFrame(data)
+                            df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+                            df = df.set_index('date').sort_index()
+                            for src, dst in [('adjClose','Close'),('adjOpen','Open'),
+                                             ('adjVolume','Volume'),('close','Close'),
+                                             ('open','Open'),('volume','Volume')]:
+                                if src in df.columns:
+                                    if dst == 'Close':
+                                        all_close[ticker]  = df[src].rename(ticker)
+                                    elif dst == 'Open':
+                                        all_open[ticker]   = df[src].rename(ticker)
+                                    elif dst == 'Volume':
+                                        all_volume[ticker] = df[src].rename(ticker)
+                except Exception:
+                    pass
+
             elif resp.status_code == 404:
-                pass   # ticker not found on Tiingo — skip silently
+                pass
             elif resp.status_code == 401:
                 raise RuntimeError(
                     "Tiingo API key invalid (401). "
                     "Check your TIINGO_API_KEY secret."
                 )
             else:
-                log(f"  {ticker}: HTTP {resp.status_code}")
+                pass   # skip other errors silently
 
         except RuntimeError:
             raise
-        except Exception as e:
-            pass   # skip individual ticker failures
+        except Exception:
+            pass
 
         _time.sleep(BATCH_DELAY)
 
