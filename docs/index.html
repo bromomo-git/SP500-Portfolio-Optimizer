@@ -4,29 +4,121 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SP500 Portfolio Optimizer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background: #0f1117; color: #e0e0e0; display: flex;
-         justify-content: center; align-items: center;
-         min-height: 100vh; margin: 0; flex-direction: column; gap: 16px; }
-  h1   { color: #64B5F6; font-size: 1.8rem; margin: 0; }
-  p    { color: #90A4AE; font-size: 1rem; max-width: 480px;
-         text-align: center; line-height: 1.6; margin: 0; }
-  .badge { background: #1e2130; border: 1px solid #2196F3;
-           border-radius: 20px; padding: 8px 20px;
-           color: #64B5F6; font-size: 0.85rem; }
-  .sub { color: #546E7A; font-size: 0.78rem; }
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      background:#0f1117;color:#e0e0e0;padding:20px;}
+h1{font-size:1.55rem;color:#64B5F6;margin-bottom:4px;}
+.sub{color:#90A4AE;font-size:0.80rem;margin-bottom:22px;}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+       gap:11px;margin-bottom:26px;}
+.kpi{background:#1e2130;border-radius:10px;padding:15px;
+      border-left:4px solid #2196F3;}
+.kpi .lbl{font-size:0.68rem;color:#90A4AE;text-transform:uppercase;
+           letter-spacing:.5px;}
+.kpi .val{font-size:1.35rem;font-weight:700;margin-top:3px;}
+.pos{color:#66BB6A;}.neg{color:#EF5350;}.neu{color:#64B5F6;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+.full{grid-column:1/-1;}
+.card{background:#1e2130;border-radius:12px;padding:16px;}
+.card h3{font-size:0.78rem;color:#90A4AE;margin-bottom:11px;
+          text-transform:uppercase;letter-spacing:.5px;}
+.cw{position:relative;height:225px;}.cw.t{height:285px;}
+footer{text-align:center;color:#546E7A;font-size:0.70rem;margin-top:22px;}
+a{color:#64B5F6;}
 </style>
 </head>
 <body>
-  <h1>&#x1F4C8; SP500 Portfolio Optimizer</h1>
-  <p>Live dashboard initializing. The automated pipeline runs
-     Monday–Friday at 3:55 PM ET via GitHub Actions.
-     Full charts will appear after the first trading day run.</p>
-  <div class="badge">&#x23F3; Awaiting first automated run</div>
-  <p class="sub">
-    $1,000,000 capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp;
-    5 sectors &nbsp;|&nbsp; 45-day rolling window
-  </p>
+<h1>&#x1F4C8; SP500 Portfolio Optimizer</h1>
+<p class="sub">
+  Updated: <strong>2026-05-04</strong> &nbsp;|&nbsp;
+  $1M capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp;
+  45-day window &nbsp;|&nbsp; Powered by Google Colab
+</p>
+<div class="kpis">
+  <div class="kpi"><div class="lbl">Current NAV</div>
+    <div class="val neu">${navs[-1]:,.0f}</div></div>
+  <div class="kpi"><div class="lbl">Total P&amp;L</div>
+    <div class="val {'pos' if total_pnl>=0 else 'neg'}">
+      ${+165,785}</div></div>
+  <div class="kpi"><div class="lbl">Total Return</div>
+    <div class="val {'pos' if total_ret>=0 else 'neg'}">
+      {+16.58}%</div></div>
+  <div class="kpi"><div class="lbl">Win Rate</div>
+    <div class="val neu">{50.0}%</div></div>
+  <div class="kpi"><div class="lbl">Trading Days</div>
+    <div class="val neu">{22}</div></div>
+</div>
+<div class="grid">
+  <div class="card full">
+    <h3>NAV vs SPY Buy &amp; Hold</h3>
+    <div class="cw t"><canvas id="navChart"></canvas></div>
+  </div>
+  <div class="card"><h3>Daily P&amp;L ($)</h3>
+    <div class="cw"><canvas id="pnlChart"></canvas></div></div>
+  <div class="card"><h3>Daily Return (%)</h3>
+    <div class="cw"><canvas id="retChart"></canvas></div></div>
+  <div class="card"><h3>Daily Frontier Sharpe Target</h3>
+    <div class="cw"><canvas id="sharpeChart"></canvas></div></div>
+</div>
+<footer>
+  SP500 Portfolio Optimizer &mdash; Run via Google Colab &mdash;
+  <a href="https://github.com/bromomo-git/SP500-Portfolio-Optimizer">
+    View on GitHub</a>
+</footer>
+<script>
+const labels=["2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04"];
+const navs=[1046923.84, 1032444.53, 1051058.1, 1064173.14, 1069290.21, 1068716.18, 1061598.22, 1039970.11, 1042298.9, 1065206.44, 1073114.3, 1068644.76, 1089375.32, 1094907.57, 1100746.35, 1109491.12, 1112704.21, 1095452.62, 1145564.08, 1153425.3, 1174966.67, 1165784.94];
+const spy=[1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14];
+const pnls=[46923.84, -15241.96, 13847.89, 26316.83, -5640.07, -4311.82, -10689.56, -28809.79, -58.81, 20337.91, 16308.13, -8718.58, 7773.37, -8563.65, 2193.0, 3205.85, -6762.84, 2925.4, 38257.8, -355.58, 27409.23, -8700.14];
+const rets=[4.6924, -1.4548, 1.3351, 2.5357, -0.5247, -0.4018, -0.9969, -2.6956, -0.0056, 1.9465, 1.5432, -0.8093, 0.7187, -0.7761, 0.1996, 0.2898, -0.6041, 0.2678, 3.455, -0.0308, 2.3885, -0.7408];
+const sharps=[8.1569, 7.8153, 8.2079, 7.8159, 7.8649, 7.6988, 7.2605, 7.17, 7.202, 6.3175, 5.8623, 6.1989, 5.8819, 6.7153, 6.5395, 6.937, 6.8525, 7.2288, 7.3328, 7.2658, 7.5731, 7.5313];
+const G={color:'rgba(255,255,255,0.06)'};
+const F={color:'#90A4AE',size:10};
+new Chart(document.getElementById('navChart'),{type:'line',
+  data:{labels,datasets:[
+    {label:'Portfolio NAV',data:navs,borderColor:'#2196F3',
+      backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2.2,
+      pointRadius:2,fill:true,tension:0.3},
+    {label:'SPY (rebased)',data:spy,borderColor:'#90A4AE',
+      borderDash:[3,3],borderWidth:1.5,pointRadius:0,fill:false,tension:0.3}
+  ]},
+  options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{labels:{color:'#e0e0e0'}}},
+    scales:{x:{ticks:F,grid:G},
+      y:{ticks:{...F,callback:v=>'$'+v.toLocaleString()},grid:G}}
+  }
+});
+new Chart(document.getElementById('pnlChart'),{type:'bar',
+  data:{labels,datasets:[{label:'P&L',data:pnls,
+    backgroundColor:pnls.map(v=>v>=0?'rgba(102,187,106,0.8)':'rgba(239,83,80,0.8)'),
+    borderRadius:3}]},
+  options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{display:false}},
+    scales:{x:{ticks:F,grid:G},
+      y:{ticks:{...F,callback:v=>'$'+v.toLocaleString()},grid:G}}
+  }
+});
+new Chart(document.getElementById('retChart'),{type:'bar',
+  data:{labels,datasets:[{label:'Return %',data:rets,
+    backgroundColor:rets.map(v=>v>=0?'rgba(102,187,106,0.8)':'rgba(239,83,80,0.8)'),
+    borderRadius:3}]},
+  options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{display:false}},
+    scales:{x:{ticks:F,grid:G},
+      y:{ticks:{...F,callback:v=>v.toFixed(2)+'%'},grid:G}}
+  }
+});
+new Chart(document.getElementById('sharpeChart'),{type:'line',
+  data:{labels,datasets:[{label:'Sharpe',data:sharps,
+    borderColor:'#64B5F6',backgroundColor:'rgba(100,181,246,0.1)',
+    borderWidth:2,pointRadius:2,fill:true,tension:0.3}]},
+  options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{display:false}},
+    scales:{x:{ticks:F,grid:G},y:{ticks:F,grid:G}}
+  }
+});
+</script>
 </body>
 </html>
