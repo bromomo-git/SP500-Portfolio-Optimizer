@@ -1,0 +1,54 @@
+name: Daily Portfolio Run
+
+on:
+   # Runs Monday–Friday at 3:55 PM Eastern Time (19:55 UTC)
+  # Executes just before market close as required
+  schedule:
+    - cron: '55 19 * * 1-5'
+
+  # Lets you trigger a run manually from the Actions tab at any time
+  workflow_dispatch:
+
+jobs:
+  run-portfolio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+
+    permissions:
+      contents: write
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install fear-and-greed
+
+      - name: Install IDAES solvers (Bonmin)
+        run: |
+          pip install idaes-pse
+          idaes get-extensions --to ~/.idaes/bin
+          echo "$HOME/.idaes/bin" >> $GITHUB_PATH
+
+      - name: Run daily portfolio optimization
+        run: python portfolio.py
+
+      - name: Commit results back to repository
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/portfolio_state.json
+          git add results/performance_log.csv
+          git add dashboard/index.html
+          git diff --staged --quiet || git commit -m "Auto: portfolio run $(date +'%Y-%m-%d')"
+          git push
