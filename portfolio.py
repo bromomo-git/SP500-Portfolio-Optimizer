@@ -35,7 +35,7 @@ from datetime import datetime, date, timedelta
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
+import yfinance as yf      # used only for Golden Cross SPY data
 import matplotlib
 matplotlib.use('Agg')          # headless — no display needed in CI
 import matplotlib.pyplot as plt
@@ -228,38 +228,27 @@ def build_universe():
 
 def download_data(all_tickers, ticker_sector):
     """
-    Download price data using yfinance with a properly configured session.
-    The YFTzMissingError on every ticker is caused by Yahoo Finance blocking
-    requests that lack proper browser-style headers. We fix this by injecting
-    a requests Session with headers before downloading.
-    Downloads in batches of 20 with delays to stay within rate limits.
+    Download price data using pandas_datareader with STOOQ as the backend.
+    STOOQ is used instead of yfinance because Yahoo Finance blocks requests
+    from GitHub Actions cloud IP addresses entirely, regardless of headers.
+    STOOQ serves data without authentication and works reliably from CI/CD.
+
+    STOOQ ticker format: US stocks use plain ticker (e.g. AAPL, MSFT)
+    SPY and ^VIX are also available.
     """
     import time as _time
-    import requests
-    from requests.adapters import HTTPAdapter
+    from pandas_datareader.stooq import StooqDailyReader
 
-    start = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
-    end   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
+    start_dt = date.today() - timedelta(days=75)
+    end_dt   = date.today()
+
     fetch = all_tickers + ['SPY', '^VIX']
 
-    BATCH_SIZE  = 20
-    BATCH_DELAY = 6
+    BATCH_SIZE  = 10   # smaller batches — STOOQ is fast, no auth needed
+    BATCH_DELAY = 2    # short delay between batches
 
-    log(f"Downloading {len(fetch)} tickers in batches of {BATCH_SIZE} "
-        f"({start} to {end}) ...")
-
-    # Build a session with browser-like headers to avoid 401/empty responses
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                           'AppleWebKit/537.36 (KHTML, like Gecko) '
-                           'Chrome/120.0.0.0 Safari/537.36',
-        'Accept':          'text/html,application/xhtml+xml,application/xml;'
-                           'q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection':      'keep-alive',
-    })
+    log(f"Downloading {len(fetch)} tickers via STOOQ "
+        f"({start_dt} to {end_dt}) ...")
 
     all_close  = {}
     all_open   = {}
@@ -268,92 +257,122 @@ def download_data(all_tickers, ticker_sector):
     batches = [fetch[i:i+BATCH_SIZE] for i in range(0, len(fetch), BATCH_SIZE)]
 
     for batch_num, batch in enumerate(batches, 1):
-        log(f"  Batch {batch_num}/{len(batches)}: "
-            f"{batch[:4]}{'...' if len(batch)>4 else ''}")
-        success = False
-        for attempt in range(3):
-            try:
-                # Download one ticker at a time within each batch
-                # This is slower but far more reliable against rate limiting
-                for ticker in batch:
-                    try:
-                        tk  = yf.Ticker(ticker, session=session)
-                        hist = tk.history(start=start, end=end, interval='1d',
-                                          auto_adjust=True, raise_errors=False)
-                        if hist is not None and not hist.empty:
-                            all_close[ticker]  = hist['Close']
-                            all_open[ticker]   = hist['Open']
-                            all_volume[ticker] = hist['Volume']
-                        _time.sleep(0.3)   # small per-ticker pause
-                    except Exception:
-                        pass   # individual ticker failure — continue
-                success = True
-                break
-            except Exception as e:
-                log(f"  Batch {batch_num} attempt {attempt+1} failed: {e}")
-                if attempt < 2:
-                    _time.sleep(10)
+        if batch_num % 5 == 1:
+            log(f"  Progress: batch {batch_num}/{len(batches)} "
+                f"({len(all_close)} tickers downloaded so far)")
 
-        if batch_num < len(batches):
-            _time.sleep(BATCH_DELAY)
+        for ticker in batch:
+            # STOOQ uses uppercase tickers; VIX uses ^VIX
+            stooq_ticker = ticker.upper()
+            for attempt in range(3):
+                try:
+                    reader = StooqDailyReader(
+                        stooq_ticker,
+                        start=start_dt,
+                        end=end_dt
+                    )
+                    df = reader.read()
+
+                    if df is None or df.empty:
+                        break   # no data for this ticker — skip
+
+                    # STOOQ returns newest-first — sort ascending
+                    df = df.sort_index()
+
+                    # Normalise column names (STOOQ uses Title Case)
+                    df.columns = [c.capitalize() for c in df.columns]
+
+                    # Strip timezone info for consistency
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
+
+                    if 'Close' in df.columns:
+                        all_close[ticker]  = df['Close']
+                    if 'Open' in df.columns:
+                        all_open[ticker]   = df['Open']
+                    if 'Volume' in df.columns:
+                        all_volume[ticker] = df['Volume']
+                    break   # success
+
+                except Exception as e:
+                    if attempt < 2:
+                        _time.sleep(2)
+                    # else: silently skip after 3 failures
+
+            _time.sleep(0.1)   # tiny pause between tickers
+
+        _time.sleep(BATCH_DELAY)
 
     downloaded = len(all_close)
     log(f"  Got data for {downloaded}/{len(fetch)} tickers")
 
     if downloaded < 10:
         raise RuntimeError(
-            f"Only {downloaded} tickers returned data — Yahoo Finance is "
-            "blocking this runner. Wait 10 minutes and re-run the workflow."
+            f"Only {downloaded} tickers returned data from STOOQ. "
+            "Check network connectivity or try again later."
         )
 
-    # Build DataFrames from per-ticker series
-    # Align on a common datetime index
+    # Build aligned DataFrames
     def build_df(data_dict, keys):
-        available = {k: data_dict[k] for k in keys if k in data_dict}
-        if not available:
+        series = {k: data_dict[k] for k in keys if k in data_dict}
+        if not series:
             return pd.DataFrame()
-        df = pd.DataFrame(available)
+        df = pd.DataFrame(series)
         df.index = pd.to_datetime(df.index).tz_localize(None)
-        return df.ffill().bfill()
+        return df.sort_index().ffill().bfill()
 
     close_all  = build_df(all_close,  fetch)
     open_all   = build_df(all_open,   fetch)
     volume_all = build_df(all_volume, fetch)
 
+    # Separate benchmark series
     spy_close = close_all['SPY'].copy() if 'SPY' in close_all.columns else None
     vix_close = close_all['^VIX'].copy() if '^VIX' in close_all.columns else None
 
-    # Filter to universe tickers only
-    available_tickers = [t for t in all_tickers if t in close_all.columns]
-    missing_count     = len(all_tickers) - len(available_tickers)
-    if missing_count:
-        log(f"  {missing_count} tickers had no data — excluded")
-    all_tickers   = available_tickers
+    # Filter to available universe tickers
+    available = [t for t in all_tickers if t in close_all.columns]
+    missing   = len(all_tickers) - len(available)
+    if missing:
+        log(f"  {missing} universe tickers had no STOOQ data — excluded")
+    all_tickers   = available
     ticker_sector = {t: s for t, s in ticker_sector.items()
-                     if t in available_tickers}
-
-    # Drop tickers with >20% missing values
-    if all_tickers:
-        avail = close_all[all_tickers]
-        bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
-        if bad:
-            log(f"  Dropped {len(bad)} tickers (>20% missing)")
-            all_tickers   = [t for t in all_tickers if t not in bad]
-            ticker_sector = {t: s for t, s in ticker_sector.items()
-                             if t not in bad}
+                     if t in available}
 
     if not all_tickers:
-        raise RuntimeError("No universe tickers survived download filtering.")
+        raise RuntimeError("No universe tickers survived STOOQ download.")
+
+    # Drop tickers with >20% missing values
+    avail = close_all[all_tickers]
+    bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
+    if bad:
+        log(f"  Dropped {len(bad)} tickers (>20% missing data)")
+        all_tickers   = [t for t in all_tickers if t not in bad]
+        ticker_sector = {t: s for t, s in ticker_sector.items()
+                         if t not in bad}
+
+    # Also rebuild volume — fill missing with column mean
+    # (STOOQ sometimes omits volume for certain tickers)
+    if volume_all.empty or len(volume_all.columns) == 0:
+        log("  Volume data unavailable — using equal weights for filter signal")
+        volume_all = pd.DataFrame(
+            np.ones((len(close_all), len(all_tickers))),
+            index=close_all.index,
+            columns=all_tickers
+        )
 
     close_px  = close_all[all_tickers].copy()
-    open_px   = open_all[all_tickers].copy()
-    volume_px = volume_all[all_tickers].copy()
+    open_px   = open_all[all_tickers].copy() if not open_all.empty else close_px.copy()
+    volume_px = (volume_all[all_tickers].copy()
+                 if all_tickers[0] in volume_all.columns
+                 else pd.DataFrame(np.ones_like(close_px), 
+                                   index=close_px.index,
+                                   columns=all_tickers))
+
     daily_ret = close_px.pct_change().dropna(how='all')
 
     if len(daily_ret) == 0:
         raise RuntimeError(
-            "Download returned 0 trading days. "
-            "Yahoo Finance may be temporarily unavailable — retry in 10 minutes."
+            "STOOQ returned 0 trading days of data. "
+            "This is unexpected — check STOOQ availability."
         )
 
     log(f"Download complete — {len(daily_ret)} trading days, "
