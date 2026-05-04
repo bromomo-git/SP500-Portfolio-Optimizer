@@ -1,13 +1,12 @@
 name: Daily Portfolio Run
 
 on:
-   # Runs Monday–Friday at 3:55 PM Eastern Time (19:55 UTC)
-  # Executes just before market close as required
   schedule:
     - cron: '55 19 * * 1-5'
-
-  # Lets you trigger a run manually from the Actions tab at any time
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run-portfolio:
@@ -49,6 +48,6 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add data/portfolio_state.json
           git add results/performance_log.csv
-          git add dashboard/index.html
+          git add docs/index.html
           git diff --staged --quiet || git commit -m "Auto: portfolio run $(date +'%Y-%m-%d')"
           git push
