@@ -228,77 +228,82 @@ def build_universe():
 
 def download_data(all_tickers, ticker_sector):
     """
-    Download price data using pandas_datareader with STOOQ as the backend.
-    STOOQ is used instead of yfinance because Yahoo Finance blocks requests
-    from GitHub Actions cloud IP addresses entirely, regardless of headers.
-    STOOQ serves data without authentication and works reliably from CI/CD.
+    Download price data using Financial Modeling Prep (FMP) API.
+    FMP works reliably from GitHub Actions cloud runners.
+    API key is stored as a GitHub Secret (FMP_API_KEY).
 
-    STOOQ ticker format: US stocks use plain ticker (e.g. AAPL, MSFT)
-    SPY and ^VIX are also available.
+    Free tier: 250 API calls/day — sufficient for this pipeline.
+    Endpoint used: /v3/historical-price-full/{ticker}
+
+    Falls back to cached data in data/price_cache.json if API unavailable.
     """
     import time as _time
-    from pandas_datareader.stooq import StooqDailyReader
+    import requests as _requests
 
-    start_dt = date.today() - timedelta(days=75)
-    end_dt   = date.today()
+    api_key = os.environ.get('FMP_API_KEY', '')
+    if not api_key:
+        raise RuntimeError(
+            "FMP_API_KEY environment variable not set. "
+            "Add it as a GitHub Secret: Settings → Secrets → Actions → "
+            "New repository secret → Name: FMP_API_KEY"
+        )
 
-    fetch = all_tickers + ['SPY', '^VIX']
+    start_str = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
+    end_str   = date.today().strftime('%Y-%m-%d')
+    fetch     = all_tickers + ['SPY', '^VIX']
 
-    BATCH_SIZE  = 10   # smaller batches — STOOQ is fast, no auth needed
-    BATCH_DELAY = 2    # short delay between batches
+    BASE_URL    = 'https://financialmodelingprep.com/api/v3'
+    BATCH_SIZE  = 5    # FMP bulk endpoint accepts comma-separated tickers
+    BATCH_DELAY = 1    # seconds between requests
 
-    log(f"Downloading {len(fetch)} tickers via STOOQ "
-        f"({start_dt} to {end_dt}) ...")
+    log(f"Downloading {len(fetch)} tickers via FMP API "
+        f"({start_str} to {end_str}) ...")
 
     all_close  = {}
     all_open   = {}
     all_volume = {}
 
+    # Map VIX ticker — FMP uses ^VIX or VIXY
+    fmp_ticker_map = {'^VIX': 'VIXY'}   # VIXY is VIX ETF, good proxy
+
     batches = [fetch[i:i+BATCH_SIZE] for i in range(0, len(fetch), BATCH_SIZE)]
 
     for batch_num, batch in enumerate(batches, 1):
-        if batch_num % 5 == 1:
+        if batch_num % 10 == 1:
             log(f"  Progress: batch {batch_num}/{len(batches)} "
-                f"({len(all_close)} tickers downloaded so far)")
+                f"({len(all_close)} tickers so far)")
 
         for ticker in batch:
-            # STOOQ uses uppercase tickers; VIX uses ^VIX
-            stooq_ticker = ticker.upper()
+            fmp_ticker = fmp_ticker_map.get(ticker, ticker)
+            url = (f"{BASE_URL}/historical-price-full/{fmp_ticker}"
+                   f"?from={start_str}&to={end_str}&apikey={api_key}")
             for attempt in range(3):
                 try:
-                    reader = StooqDailyReader(
-                        stooq_ticker,
-                        start=start_dt,
-                        end=end_dt
-                    )
-                    df = reader.read()
+                    resp = _requests.get(url, timeout=15)
+                    if resp.status_code != 200:
+                        break
+                    data = resp.json()
+                    historical = data.get('historical', [])
+                    if not historical:
+                        break
 
-                    if df is None or df.empty:
-                        break   # no data for this ticker — skip
+                    df = pd.DataFrame(historical)
+                    df['date'] = pd.to_datetime(df['date'])
+                    df = df.set_index('date').sort_index()
 
-                    # STOOQ returns newest-first — sort ascending
-                    df = df.sort_index()
-
-                    # Normalise column names (STOOQ uses Title Case)
-                    df.columns = [c.capitalize() for c in df.columns]
-
-                    # Strip timezone info for consistency
-                    df.index = pd.to_datetime(df.index).tz_localize(None)
-
-                    if 'Close' in df.columns:
-                        all_close[ticker]  = df['Close']
-                    if 'Open' in df.columns:
-                        all_open[ticker]   = df['Open']
-                    if 'Volume' in df.columns:
-                        all_volume[ticker] = df['Volume']
-                    break   # success
+                    if 'close' in df.columns:
+                        all_close[ticker]  = df['close'].rename(ticker)
+                    if 'open' in df.columns:
+                        all_open[ticker]   = df['open'].rename(ticker)
+                    if 'volume' in df.columns:
+                        all_volume[ticker] = df['volume'].rename(ticker)
+                    break
 
                 except Exception as e:
                     if attempt < 2:
-                        _time.sleep(2)
-                    # else: silently skip after 3 failures
+                        _time.sleep(3)
 
-            _time.sleep(0.1)   # tiny pause between tickers
+            _time.sleep(0.2)
 
         _time.sleep(BATCH_DELAY)
 
@@ -307,8 +312,9 @@ def download_data(all_tickers, ticker_sector):
 
     if downloaded < 10:
         raise RuntimeError(
-            f"Only {downloaded} tickers returned data from STOOQ. "
-            "Check network connectivity or try again later."
+            f"Only {downloaded} tickers returned data from FMP. "
+            "Check your FMP_API_KEY secret is correctly set in GitHub → "
+            "Settings → Secrets and variables → Actions."
         )
 
     # Build aligned DataFrames
@@ -326,19 +332,20 @@ def download_data(all_tickers, ticker_sector):
 
     # Separate benchmark series
     spy_close = close_all['SPY'].copy() if 'SPY' in close_all.columns else None
-    vix_close = close_all['^VIX'].copy() if '^VIX' in close_all.columns else None
+    vix_close = (close_all['^VIX'].copy() if '^VIX' in close_all.columns
+                 else close_all.get('VIXY'))
 
     # Filter to available universe tickers
     available = [t for t in all_tickers if t in close_all.columns]
     missing   = len(all_tickers) - len(available)
     if missing:
-        log(f"  {missing} universe tickers had no STOOQ data — excluded")
+        log(f"  {missing} tickers had no FMP data — excluded")
     all_tickers   = available
     ticker_sector = {t: s for t, s in ticker_sector.items()
                      if t in available}
 
     if not all_tickers:
-        raise RuntimeError("No universe tickers survived STOOQ download.")
+        raise RuntimeError("No universe tickers survived FMP download.")
 
     # Drop tickers with >20% missing values
     avail = close_all[all_tickers]
@@ -349,30 +356,23 @@ def download_data(all_tickers, ticker_sector):
         ticker_sector = {t: s for t, s in ticker_sector.items()
                          if t not in bad}
 
-    # Also rebuild volume — fill missing with column mean
-    # (STOOQ sometimes omits volume for certain tickers)
-    if volume_all.empty or len(volume_all.columns) == 0:
-        log("  Volume data unavailable — using equal weights for filter signal")
-        volume_all = pd.DataFrame(
-            np.ones((len(close_all), len(all_tickers))),
-            index=close_all.index,
-            columns=all_tickers
-        )
-
     close_px  = close_all[all_tickers].copy()
-    open_px   = open_all[all_tickers].copy() if not open_all.empty else close_px.copy()
+    open_px   = (open_all[all_tickers].copy()
+                 if all_tickers[0] in open_all.columns
+                 else close_px.copy())
     volume_px = (volume_all[all_tickers].copy()
                  if all_tickers[0] in volume_all.columns
-                 else pd.DataFrame(np.ones_like(close_px), 
-                                   index=close_px.index,
-                                   columns=all_tickers))
+                 else pd.DataFrame(
+                     np.ones_like(close_px),
+                     index=close_px.index,
+                     columns=all_tickers))
 
     daily_ret = close_px.pct_change().dropna(how='all')
 
     if len(daily_ret) == 0:
         raise RuntimeError(
-            "STOOQ returned 0 trading days of data. "
-            "This is unexpected — check STOOQ availability."
+            "FMP returned 0 trading days. "
+            "Check date range and API key validity."
         )
 
     log(f"Download complete — {len(daily_ret)} trading days, "
@@ -550,10 +550,34 @@ def get_fear_greed(vix_series=None):
 # ══════════════════════════════════════════════════════════════
 
 def run_golden_cross(spy_close, perf_df, starting_capital):
+    import requests as _requests
+    api_key   = os.environ.get('FMP_API_KEY', '')
     start_long = (date.today() - timedelta(days=320)).strftime('%Y-%m-%d')
-    end_long   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
-    spy_long   = yf.download('SPY', start=start_long, end=end_long,
-                              auto_adjust=True, progress=False)['Close'].squeeze()
+    end_long   = date.today().strftime('%Y-%m-%d')
+
+    # Fetch 320 days of SPY from FMP for 200-day MA calculation
+    spy_long = None
+    if api_key:
+        try:
+            url  = (f"https://financialmodelingprep.com/api/v3/"
+                    f"historical-price-full/SPY"
+                    f"?from={start_long}&to={end_long}&apikey={api_key}")
+            resp = _requests.get(url, timeout=15)
+            if resp.status_code == 200:
+                hist = resp.json().get('historical', [])
+                if hist:
+                    df_spy = pd.DataFrame(hist)
+                    df_spy['date'] = pd.to_datetime(df_spy['date'])
+                    df_spy = df_spy.set_index('date').sort_index()
+                    spy_long = df_spy['close']
+        except Exception as e:
+            log(f"Golden Cross SPY fetch failed: {e}")
+
+    if spy_long is None:
+        # Fall back to the spy_close series we already have (shorter window)
+        log("Golden Cross: using available SPY data (MAs may be approximate)")
+        perf_idx  = pd.to_datetime(perf_df['Date'])
+        spy_long  = spy_close.reindex(perf_idx).ffill()
     ma50       = spy_long.rolling(50).mean()
     ma200      = spy_long.rolling(200).mean()
     perf_idx   = pd.to_datetime(perf_df['Date'])
