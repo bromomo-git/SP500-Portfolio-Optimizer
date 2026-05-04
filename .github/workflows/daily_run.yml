@@ -44,13 +44,13 @@ jobs:
         run: |
           python3 -c "
 import requests, os
-key = os.environ.get('FMP_API_KEY', 'NOT SET')
-print(f'Key length: {len(key)} chars')
-print(f'Key starts with: {key[:8]}...')
-url = f'https://financialmodelingprep.com/api/v3/historical-price-full/AAPL?from=2026-04-01&to=2026-05-01&apikey={key}'
+key = os.environ.get('FMP_API_KEY', 'NOT_SET')
+print('Key length:', len(key))
+print('Key prefix:', key[:8])
+url = 'https://financialmodelingprep.com/api/v3/historical-price-full/AAPL?from=2026-04-01&to=2026-05-01&apikey=' + key
 resp = requests.get(url, timeout=15)
-print(f'HTTP status: {resp.status_code}')
-print(f'Response (first 500 chars): {resp.text[:500]}')
+print('HTTP status:', resp.status_code)
+print('Response:', resp.text[:500])
 "
 
       - name: Run daily portfolio optimization
@@ -60,7 +60,7 @@ print(f'Response (first 500 chars): {resp.text[:500]}')
 
       - name: Commit results back to repository
         run: |
-          git config --global user.name  "github-actions[bot]"
+          git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add data/portfolio_state.json
           git add results/performance_log.csv
