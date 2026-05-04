@@ -1,7 +1,7 @@
 """
 SP500 Portfolio Optimizer — Daily Production Script
 ====================================================
-Runs automatically via GitHub Actions every trading day at 4:05 PM ET.
+Runs automatically via GitHub Actions every trading day at 3:55 PM ET.
 
 Full pipeline per run:
   1.  Load portfolio state (cash, positions, NAV history)
@@ -90,7 +90,7 @@ SECTOR_COLOURS = {
 
 STATE_FILE = 'data/portfolio_state.json'
 LOG_FILE   = 'results/performance_log.csv'
-DASHBOARD  = 'dashboard/index.html'
+DASHBOARD  = 'docs/index.html'
 
 BONMIN_PATH = os.path.expanduser('~/.idaes/bin/bonmin')
 if not os.path.exists(BONMIN_PATH):
@@ -448,7 +448,7 @@ def compute_metrics(nav_series, label, starting_capital):
 def build_dashboard(perf_df, today_str, frontier_data,
                     best_sharpe, fg_score, fg_label, fg_mult,
                     spy_close, gc_series, gc_regime, vix_series):
-    os.makedirs('dashboard', exist_ok=True)
+    os.makedirs('docs', exist_ok=True)
 
     dates   = perf_df['Date'].astype(str).tolist()
     navs    = perf_df['NAV'].tolist()
@@ -567,7 +567,7 @@ a {{color:#64B5F6;}}
     <div class="cw"><canvas id="frontierChart"></canvas></div></div>
 </div>
 <footer>
-  SP500 Portfolio Optimizer &mdash; GitHub Actions &mdash; Mon&ndash;Fri 4:05 PM ET &mdash;
+  SP500 Portfolio Optimizer &mdash; GitHub Actions &mdash; Mon&ndash;Fri 3:55 PM ET &mdash;
   <a href="https://github.com/bromomo-git/SP500-Portfolio-Optimizer">View on GitHub</a>
 </footer>
 <script>
