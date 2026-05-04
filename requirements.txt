@@ -5,4 +5,4 @@ pyomo==6.7.1
 scikit-learn==1.4.2
 matplotlib==3.8.4
 requests==2.31.0
-fear-and-greed==1.3.0
+fear-and-greed==0.4
