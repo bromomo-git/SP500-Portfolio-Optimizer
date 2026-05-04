@@ -38,14 +38,14 @@ jobs:
           idaes get-extensions --to ~/.idaes/bin
           echo "$HOME/.idaes/bin" >> $GITHUB_PATH
 
-      - name: Debug FMP API connection
+      - name: Debug Tiingo API connection
         env:
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
         run: python debug_fmp.py
 
       - name: Run daily portfolio optimization
         env:
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
         run: python portfolio.py
 
       - name: Commit results back to repository
