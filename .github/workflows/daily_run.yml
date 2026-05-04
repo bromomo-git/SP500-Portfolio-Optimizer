@@ -41,17 +41,7 @@ jobs:
       - name: Debug FMP API connection
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-        run: |
-          python3 -c "
-import requests, os
-key = os.environ.get('FMP_API_KEY', 'NOT_SET')
-print('Key length:', len(key))
-print('Key prefix:', key[:8])
-url = 'https://financialmodelingprep.com/api/v3/historical-price-full/AAPL?from=2026-04-01&to=2026-05-01&apikey=' + key
-resp = requests.get(url, timeout=15)
-print('HTTP status:', resp.status_code)
-print('Response:', resp.text[:500])
-"
+        run: python debug_fmp.py
 
       - name: Run daily portfolio optimization
         env:
