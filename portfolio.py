@@ -228,76 +228,70 @@ def build_universe():
 
 def download_data(all_tickers, ticker_sector):
     """
-    Download price data using Financial Modeling Prep (FMP) API.
-    FMP works reliably from GitHub Actions cloud runners.
-    API key is stored as a GitHub Secret (FMP_API_KEY).
-
-    Free tier: 250 API calls/day — sufficient for this pipeline.
-    Endpoint used: /v3/historical-price-full/{ticker}
-
-    Falls back to cached data in data/price_cache.json if API unavailable.
+    Download price data using yfinance + curl_cffi.
+    curl_cffi impersonates a real browser TLS fingerprint, bypassing
+    the IP-level blocks that GitHub Actions runners encounter with
+    standard requests. This is the standard production workaround
+    for yfinance in CI/CD environments as of 2025.
     """
     import time as _time
-    import requests as _requests
 
-    api_key = os.environ.get('FMP_API_KEY', '')
-    if not api_key:
-        raise RuntimeError(
-            "FMP_API_KEY environment variable not set. "
-            "Add it as a GitHub Secret: Settings → Secrets → Actions → "
-            "New repository secret → Name: FMP_API_KEY"
-        )
+    # curl_cffi must be imported to activate yfinance browser impersonation
+    try:
+        from curl_cffi import requests as curl_requests
+        HAS_CURL = True
+    except ImportError:
+        HAS_CURL = False
+        log("WARNING: curl_cffi not available — download may fail on cloud runners")
 
     start_str = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
-    end_str   = date.today().strftime('%Y-%m-%d')
+    end_str   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
     fetch     = all_tickers + ['SPY', '^VIX']
 
-    BASE_URL    = 'https://financialmodelingprep.com/api/v3'
-    BATCH_SIZE  = 5    # FMP bulk endpoint accepts comma-separated tickers
-    BATCH_DELAY = 1    # seconds between requests
+    BATCH_SIZE  = 10
+    BATCH_DELAY = 2
 
-    log(f"Downloading {len(fetch)} tickers via FMP API "
+    log(f"Downloading {len(fetch)} tickers via yfinance+curl_cffi "
         f"({start_str} to {end_str}) ...")
 
     all_close  = {}
     all_open   = {}
     all_volume = {}
 
-    # Map VIX ticker — FMP uses ^VIX or VIXY
-    fmp_ticker_map = {'^VIX': 'VIXY'}   # VIXY is VIX ETF, good proxy
-
     batches = [fetch[i:i+BATCH_SIZE] for i in range(0, len(fetch), BATCH_SIZE)]
 
     for batch_num, batch in enumerate(batches, 1):
-        if batch_num % 10 == 1:
+        if batch_num % 5 == 1:
             log(f"  Progress: batch {batch_num}/{len(batches)} "
                 f"({len(all_close)} tickers so far)")
 
         for ticker in batch:
-            fmp_ticker = fmp_ticker_map.get(ticker, ticker)
-            url = (f"{BASE_URL}/historical-price-full/{fmp_ticker}"
-                   f"?from={start_str}&to={end_str}&apikey={api_key}")
             for attempt in range(3):
                 try:
-                    resp = _requests.get(url, timeout=15)
-                    if resp.status_code != 200:
-                        break
-                    data = resp.json()
-                    historical = data.get('historical', [])
-                    if not historical:
-                        break
+                    if HAS_CURL:
+                        # Use curl_cffi session — impersonates Chrome browser
+                        session = curl_requests.Session(impersonate="chrome")
+                        tk  = yf.Ticker(ticker, session=session)
+                    else:
+                        tk = yf.Ticker(ticker)
 
-                    df = pd.DataFrame(historical)
-                    df['date'] = pd.to_datetime(df['date'])
-                    df = df.set_index('date').sort_index()
+                    hist = tk.history(
+                        start=start_str,
+                        end=end_str,
+                        interval='1d',
+                        auto_adjust=True,
+                        raise_errors=False
+                    )
 
-                    if 'close' in df.columns:
-                        all_close[ticker]  = df['close'].rename(ticker)
-                    if 'open' in df.columns:
-                        all_open[ticker]   = df['open'].rename(ticker)
-                    if 'volume' in df.columns:
-                        all_volume[ticker] = df['volume'].rename(ticker)
-                    break
+                    if hist is not None and not hist.empty:
+                        hist.index = pd.to_datetime(hist.index).tz_localize(None)
+                        if 'Close' in hist.columns:
+                            all_close[ticker]  = hist['Close']
+                        if 'Open' in hist.columns:
+                            all_open[ticker]   = hist['Open']
+                        if 'Volume' in hist.columns:
+                            all_volume[ticker] = hist['Volume']
+                        break
 
                 except Exception as e:
                     if attempt < 2:
@@ -312,9 +306,9 @@ def download_data(all_tickers, ticker_sector):
 
     if downloaded < 10:
         raise RuntimeError(
-            f"Only {downloaded} tickers returned data from FMP. "
-            "Check your FMP_API_KEY secret is correctly set in GitHub → "
-            "Settings → Secrets and variables → Actions."
+            f"Only {downloaded} tickers returned data. "
+            "curl_cffi browser impersonation may not be working on this runner. "
+            "Check workflow logs for curl_cffi import status."
         )
 
     # Build aligned DataFrames
@@ -330,24 +324,20 @@ def download_data(all_tickers, ticker_sector):
     open_all   = build_df(all_open,   fetch)
     volume_all = build_df(all_volume, fetch)
 
-    # Separate benchmark series
     spy_close = close_all['SPY'].copy() if 'SPY' in close_all.columns else None
-    vix_close = (close_all['^VIX'].copy() if '^VIX' in close_all.columns
-                 else close_all.get('VIXY'))
+    vix_close = close_all['^VIX'].copy() if '^VIX' in close_all.columns else None
 
-    # Filter to available universe tickers
     available = [t for t in all_tickers if t in close_all.columns]
     missing   = len(all_tickers) - len(available)
     if missing:
-        log(f"  {missing} tickers had no FMP data — excluded")
+        log(f"  {missing} tickers had no data — excluded")
     all_tickers   = available
     ticker_sector = {t: s for t, s in ticker_sector.items()
                      if t in available}
 
     if not all_tickers:
-        raise RuntimeError("No universe tickers survived FMP download.")
+        raise RuntimeError("No universe tickers survived download.")
 
-    # Drop tickers with >20% missing values
     avail = close_all[all_tickers]
     bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
     if bad:
@@ -370,10 +360,7 @@ def download_data(all_tickers, ticker_sector):
     daily_ret = close_px.pct_change().dropna(how='all')
 
     if len(daily_ret) == 0:
-        raise RuntimeError(
-            "FMP returned 0 trading days. "
-            "Check date range and API key validity."
-        )
+        raise RuntimeError("Download returned 0 trading days.")
 
     log(f"Download complete — {len(daily_ret)} trading days, "
         f"{len(all_tickers)} stocks")
@@ -550,34 +537,30 @@ def get_fear_greed(vix_series=None):
 # ══════════════════════════════════════════════════════════════
 
 def run_golden_cross(spy_close, perf_df, starting_capital):
-    import requests as _requests
-    api_key   = os.environ.get('FMP_API_KEY', '')
     start_long = (date.today() - timedelta(days=320)).strftime('%Y-%m-%d')
     end_long   = date.today().strftime('%Y-%m-%d')
 
     # Fetch 320 days of SPY from FMP for 200-day MA calculation
+    # Use curl_cffi + yfinance for SPY download (same approach as main download)
     spy_long = None
-    if api_key:
-        try:
-            url  = (f"https://financialmodelingprep.com/api/v3/"
-                    f"historical-price-full/SPY"
-                    f"?from={start_long}&to={end_long}&apikey={api_key}")
-            resp = _requests.get(url, timeout=15)
-            if resp.status_code == 200:
-                hist = resp.json().get('historical', [])
-                if hist:
-                    df_spy = pd.DataFrame(hist)
-                    df_spy['date'] = pd.to_datetime(df_spy['date'])
-                    df_spy = df_spy.set_index('date').sort_index()
-                    spy_long = df_spy['close']
-        except Exception as e:
-            log(f"Golden Cross SPY fetch failed: {e}")
+    try:
+        from curl_cffi import requests as curl_requests
+        session  = curl_requests.Session(impersonate="chrome")
+        tk_spy   = yf.Ticker('SPY', session=session)
+        hist_spy = tk_spy.history(start=start_long, end=end_long,
+                                   interval='1d', auto_adjust=True,
+                                   raise_errors=False)
+        if hist_spy is not None and not hist_spy.empty:
+            hist_spy.index = pd.to_datetime(hist_spy.index).tz_localize(None)
+            spy_long = hist_spy['Close']
+            log(f"Golden Cross: downloaded {len(spy_long)} days of SPY")
+    except Exception as e:
+        log(f"Golden Cross SPY fetch failed: {e}")
 
-    if spy_long is None:
-        # Fall back to the spy_close series we already have (shorter window)
+    if spy_long is None or len(spy_long) < 50:
         log("Golden Cross: using available SPY data (MAs may be approximate)")
-        perf_idx  = pd.to_datetime(perf_df['Date'])
-        spy_long  = spy_close.reindex(perf_idx).ffill()
+        perf_idx = pd.to_datetime(perf_df['Date'])
+        spy_long = spy_close.reindex(perf_idx).ffill()
     ma50       = spy_long.rolling(50).mean()
     ma200      = spy_long.rolling(200).mean()
     perf_idx   = pd.to_datetime(perf_df['Date'])
