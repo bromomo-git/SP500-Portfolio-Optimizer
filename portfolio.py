@@ -228,23 +228,38 @@ def build_universe():
 
 def download_data(all_tickers, ticker_sector):
     """
-    Download price data in small batches with delays to avoid Yahoo Finance
-    rate limiting, which blocks large simultaneous requests from cloud IPs.
-    Batch size of 25 with 3-second delays has proven reliable in CI/CD.
+    Download price data using yfinance with a properly configured session.
+    The YFTzMissingError on every ticker is caused by Yahoo Finance blocking
+    requests that lack proper browser-style headers. We fix this by injecting
+    a requests Session with headers before downloading.
+    Downloads in batches of 20 with delays to stay within rate limits.
     """
     import time as _time
+    import requests
+    from requests.adapters import HTTPAdapter
 
     start = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
     end   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
-
-    # Include SPY and VIX in the fetch list
     fetch = all_tickers + ['SPY', '^VIX']
 
-    BATCH_SIZE  = 25    # tickers per request
-    BATCH_DELAY = 4     # seconds between batches
+    BATCH_SIZE  = 20
+    BATCH_DELAY = 6
 
     log(f"Downloading {len(fetch)} tickers in batches of {BATCH_SIZE} "
         f"({start} to {end}) ...")
+
+    # Build a session with browser-like headers to avoid 401/empty responses
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                           'AppleWebKit/537.36 (KHTML, like Gecko) '
+                           'Chrome/120.0.0.0 Safari/537.36',
+        'Accept':          'text/html,application/xhtml+xml,application/xml;'
+                           'q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection':      'keep-alive',
+    })
 
     all_close  = {}
     all_open   = {}
@@ -253,74 +268,82 @@ def download_data(all_tickers, ticker_sector):
     batches = [fetch[i:i+BATCH_SIZE] for i in range(0, len(fetch), BATCH_SIZE)]
 
     for batch_num, batch in enumerate(batches, 1):
-        log(f"  Batch {batch_num}/{len(batches)}: {batch[:5]}{'...' if len(batch)>5 else ''}")
-        attempts = 0
-        while attempts < 3:
+        log(f"  Batch {batch_num}/{len(batches)}: "
+            f"{batch[:4]}{'...' if len(batch)>4 else ''}")
+        success = False
+        for attempt in range(3):
             try:
-                raw = yf.download(
-                    batch, start=start, end=end,
-                    auto_adjust=True, progress=False,
-                    interval='1d', group_by='ticker'
-                )
-                # Handle both single-ticker and multi-ticker responses
-                if len(batch) == 1:
-                    t = batch[0]
-                    if not raw.empty:
-                        all_close[t]  = raw['Close']
-                        all_open[t]   = raw['Open']
-                        all_volume[t] = raw['Volume']
-                else:
-                    for t in batch:
-                        try:
-                            if t in raw.columns.get_level_values(0):
-                                all_close[t]  = raw[t]['Close']
-                                all_open[t]   = raw[t]['Open']
-                                all_volume[t] = raw[t]['Volume']
-                        except Exception:
-                            pass
-                break   # success — exit retry loop
+                # Download one ticker at a time within each batch
+                # This is slower but far more reliable against rate limiting
+                for ticker in batch:
+                    try:
+                        tk  = yf.Ticker(ticker, session=session)
+                        hist = tk.history(start=start, end=end, interval='1d',
+                                          auto_adjust=True, raise_errors=False)
+                        if hist is not None and not hist.empty:
+                            all_close[ticker]  = hist['Close']
+                            all_open[ticker]   = hist['Open']
+                            all_volume[ticker] = hist['Volume']
+                        _time.sleep(0.3)   # small per-ticker pause
+                    except Exception:
+                        pass   # individual ticker failure — continue
+                success = True
+                break
             except Exception as e:
-                attempts += 1
-                log(f"  Batch {batch_num} attempt {attempts} failed: {e}")
-                if attempts < 3:
-                    _time.sleep(5)
+                log(f"  Batch {batch_num} attempt {attempt+1} failed: {e}")
+                if attempt < 2:
+                    _time.sleep(10)
 
         if batch_num < len(batches):
             _time.sleep(BATCH_DELAY)
 
-    if not all_close:
-        raise RuntimeError("All download batches failed — Yahoo Finance may be "
-                           "blocking this IP. Try again later.")
+    downloaded = len(all_close)
+    log(f"  Got data for {downloaded}/{len(fetch)} tickers")
 
-    # Assemble DataFrames from collected series
-    close_all  = pd.DataFrame(all_close).ffill().bfill()
-    open_all   = pd.DataFrame(all_open).ffill().bfill()
-    volume_all = pd.DataFrame(all_volume).ffill().bfill()
+    if downloaded < 10:
+        raise RuntimeError(
+            f"Only {downloaded} tickers returned data — Yahoo Finance is "
+            "blocking this runner. Wait 10 minutes and re-run the workflow."
+        )
 
-    log(f"  Downloaded {len(close_all)} trading days for "
-        f"{len(close_all.columns)} tickers")
+    # Build DataFrames from per-ticker series
+    # Align on a common datetime index
+    def build_df(data_dict, keys):
+        available = {k: data_dict[k] for k in keys if k in data_dict}
+        if not available:
+            return pd.DataFrame()
+        df = pd.DataFrame(available)
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        return df.ffill().bfill()
 
-    # Separate benchmark series
+    close_all  = build_df(all_close,  fetch)
+    open_all   = build_df(all_open,   fetch)
+    volume_all = build_df(all_volume, fetch)
+
     spy_close = close_all['SPY'].copy() if 'SPY' in close_all.columns else None
     vix_close = close_all['^VIX'].copy() if '^VIX' in close_all.columns else None
 
-    # Keep only universe tickers (drop SPY and VIX from main arrays)
-    available = [t for t in all_tickers if t in close_all.columns]
-    missing   = [t for t in all_tickers if t not in close_all.columns]
-    if missing:
-        log(f"  {len(missing)} tickers had no data — excluded")
-        all_tickers   = available
-        ticker_sector = {t: s for t, s in ticker_sector.items()
-                         if t in available}
+    # Filter to universe tickers only
+    available_tickers = [t for t in all_tickers if t in close_all.columns]
+    missing_count     = len(all_tickers) - len(available_tickers)
+    if missing_count:
+        log(f"  {missing_count} tickers had no data — excluded")
+    all_tickers   = available_tickers
+    ticker_sector = {t: s for t, s in ticker_sector.items()
+                     if t in available_tickers}
 
     # Drop tickers with >20% missing values
-    avail = close_all[all_tickers]
-    bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
-    if bad:
-        log(f"  Dropped {len(bad)} tickers (>20% missing data)")
-        all_tickers   = [t for t in all_tickers if t not in bad]
-        ticker_sector = {t: s for t, s in ticker_sector.items()
-                         if t not in bad}
+    if all_tickers:
+        avail = close_all[all_tickers]
+        bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
+        if bad:
+            log(f"  Dropped {len(bad)} tickers (>20% missing)")
+            all_tickers   = [t for t in all_tickers if t not in bad]
+            ticker_sector = {t: s for t, s in ticker_sector.items()
+                             if t not in bad}
+
+    if not all_tickers:
+        raise RuntimeError("No universe tickers survived download filtering.")
 
     close_px  = close_all[all_tickers].copy()
     open_px   = open_all[all_tickers].copy()
@@ -329,8 +352,8 @@ def download_data(all_tickers, ticker_sector):
 
     if len(daily_ret) == 0:
         raise RuntimeError(
-            f"Download returned 0 trading days for {len(all_tickers)} tickers. "
-            "Possible Yahoo Finance rate limit — retry in a few minutes."
+            "Download returned 0 trading days. "
+            "Yahoo Finance may be temporarily unavailable — retry in 10 minutes."
         )
 
     log(f"Download complete — {len(daily_ret)} trading days, "
