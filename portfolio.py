@@ -35,7 +35,6 @@ from datetime import datetime, date, timedelta
 
 import numpy as np
 import pandas as pd
-import yfinance as yf      # used only for Golden Cross SPY data
 import matplotlib
 matplotlib.use('Agg')          # headless — no display needed in CI
 import matplotlib.pyplot as plt
@@ -228,76 +227,89 @@ def build_universe():
 
 def download_data(all_tickers, ticker_sector):
     """
-    Download price data using yfinance + curl_cffi.
-    curl_cffi impersonates a real browser TLS fingerprint, bypassing
-    the IP-level blocks that GitHub Actions runners encounter with
-    standard requests. This is the standard production workaround
-    for yfinance in CI/CD environments as of 2025.
+    Download price data using Tiingo API.
+    Tiingo is a professional financial data provider that works reliably
+    from any IP including GitHub Actions. Free tier: 500 requests/day.
+    API key stored as GitHub Secret: TIINGO_API_KEY.
+
+    Tiingo daily endpoint:
+    https://api.tiingo.com/tiingo/daily/{ticker}/prices
+    ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&token=KEY
     """
     import time as _time
+    import requests as _requests
 
-    # curl_cffi must be imported to activate yfinance browser impersonation
-    try:
-        from curl_cffi import requests as curl_requests
-        HAS_CURL = True
-    except ImportError:
-        HAS_CURL = False
-        log("WARNING: curl_cffi not available — download may fail on cloud runners")
+    api_key = os.environ.get('TIINGO_API_KEY', '')
+    if not api_key:
+        raise RuntimeError(
+            "TIINGO_API_KEY not set. Add it as a GitHub Secret: "
+            "Settings -> Secrets and variables -> Actions -> New secret. "
+            "Get a free key at tiingo.com"
+        )
 
     start_str = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
-    end_str   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
-    fetch     = all_tickers + ['SPY', '^VIX']
+    end_str   = date.today().strftime('%Y-%m-%d')
+    fetch     = all_tickers + ['SPY', 'VXX']   # VXX = VIX proxy on Tiingo
 
-    BATCH_SIZE  = 10
-    BATCH_DELAY = 2
+    HEADERS     = {'Content-Type': 'application/json',
+                   'Authorization': f'Token {api_key}'}
+    BASE_URL    = 'https://api.tiingo.com/tiingo/daily'
+    BATCH_DELAY = 0.5   # Tiingo is fast — short delay is fine
 
-    log(f"Downloading {len(fetch)} tickers via yfinance+curl_cffi "
+    log(f"Downloading {len(fetch)} tickers via Tiingo API "
         f"({start_str} to {end_str}) ...")
 
     all_close  = {}
     all_open   = {}
     all_volume = {}
 
-    batches = [fetch[i:i+BATCH_SIZE] for i in range(0, len(fetch), BATCH_SIZE)]
+    for i, ticker in enumerate(fetch):
+        if i % 50 == 0:
+            log(f"  Progress: {i}/{len(fetch)} "
+                f"({len(all_close)} tickers downloaded)")
+        try:
+            url  = (f"{BASE_URL}/{ticker}/prices"
+                    f"?startDate={start_str}&endDate={end_str}"
+                    f"&resampleFreq=daily&token={api_key}")
+            resp = _requests.get(url, headers=HEADERS, timeout=15)
 
-    for batch_num, batch in enumerate(batches, 1):
-        if batch_num % 5 == 1:
-            log(f"  Progress: batch {batch_num}/{len(batches)} "
-                f"({len(all_close)} tickers so far)")
+            if resp.status_code == 200:
+                data = resp.json()
+                if data:
+                    df = pd.DataFrame(data)
+                    df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+                    df = df.set_index('date').sort_index()
 
-        for ticker in batch:
-            for attempt in range(3):
-                try:
-                    if HAS_CURL:
-                        # Use curl_cffi session — impersonates Chrome browser
-                        session = curl_requests.Session(impersonate="chrome")
-                        tk  = yf.Ticker(ticker, session=session)
-                    else:
-                        tk = yf.Ticker(ticker)
+                    col_map = {'adjClose': 'Close',
+                               'adjOpen':  'Open',
+                               'adjVolume':'Volume',
+                               'close':    'Close',
+                               'open':     'Open',
+                               'volume':   'Volume'}
 
-                    hist = tk.history(
-                        start=start_str,
-                        end=end_str,
-                        interval='1d',
-                        auto_adjust=True,
-                        raise_errors=False
-                    )
+                    for src, dst in col_map.items():
+                        if src in df.columns and dst not in all_close:
+                            if dst == 'Close':
+                                all_close[ticker]  = df[src].rename(ticker)
+                            elif dst == 'Open':
+                                all_open[ticker]   = df[src].rename(ticker)
+                            elif dst == 'Volume':
+                                all_volume[ticker] = df[src].rename(ticker)
 
-                    if hist is not None and not hist.empty:
-                        hist.index = pd.to_datetime(hist.index).tz_localize(None)
-                        if 'Close' in hist.columns:
-                            all_close[ticker]  = hist['Close']
-                        if 'Open' in hist.columns:
-                            all_open[ticker]   = hist['Open']
-                        if 'Volume' in hist.columns:
-                            all_volume[ticker] = hist['Volume']
-                        break
+            elif resp.status_code == 404:
+                pass   # ticker not found on Tiingo — skip silently
+            elif resp.status_code == 401:
+                raise RuntimeError(
+                    "Tiingo API key invalid (401). "
+                    "Check your TIINGO_API_KEY secret."
+                )
+            else:
+                log(f"  {ticker}: HTTP {resp.status_code}")
 
-                except Exception as e:
-                    if attempt < 2:
-                        _time.sleep(3)
-
-            _time.sleep(0.2)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            pass   # skip individual ticker failures
 
         _time.sleep(BATCH_DELAY)
 
@@ -306,9 +318,8 @@ def download_data(all_tickers, ticker_sector):
 
     if downloaded < 10:
         raise RuntimeError(
-            f"Only {downloaded} tickers returned data. "
-            "curl_cffi browser impersonation may not be working on this runner. "
-            "Check workflow logs for curl_cffi import status."
+            f"Only {downloaded} tickers returned data from Tiingo. "
+            "Check TIINGO_API_KEY secret and tiingo.com account status."
         )
 
     # Build aligned DataFrames
@@ -325,18 +336,18 @@ def download_data(all_tickers, ticker_sector):
     volume_all = build_df(all_volume, fetch)
 
     spy_close = close_all['SPY'].copy() if 'SPY' in close_all.columns else None
-    vix_close = close_all['^VIX'].copy() if '^VIX' in close_all.columns else None
+    vix_close = close_all['VXX'].copy() if 'VXX' in close_all.columns else None
 
     available = [t for t in all_tickers if t in close_all.columns]
     missing   = len(all_tickers) - len(available)
     if missing:
-        log(f"  {missing} tickers had no data — excluded")
+        log(f"  {missing} tickers not available on Tiingo — excluded")
     all_tickers   = available
     ticker_sector = {t: s for t, s in ticker_sector.items()
                      if t in available}
 
     if not all_tickers:
-        raise RuntimeError("No universe tickers survived download.")
+        raise RuntimeError("No universe tickers survived Tiingo download.")
 
     avail = close_all[all_tickers]
     bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
@@ -360,7 +371,7 @@ def download_data(all_tickers, ticker_sector):
     daily_ret = close_px.pct_change().dropna(how='all')
 
     if len(daily_ret) == 0:
-        raise RuntimeError("Download returned 0 trading days.")
+        raise RuntimeError("Tiingo returned 0 trading days of data.")
 
     log(f"Download complete — {len(daily_ret)} trading days, "
         f"{len(all_tickers)} stocks")
@@ -541,21 +552,31 @@ def run_golden_cross(spy_close, perf_df, starting_capital):
     end_long   = date.today().strftime('%Y-%m-%d')
 
     # Fetch 320 days of SPY from FMP for 200-day MA calculation
-    # Use curl_cffi + yfinance for SPY download (same approach as main download)
+    # Fetch SPY via Tiingo for Golden Cross (same provider as main download)
+    import requests as _req
+    api_key  = os.environ.get('TIINGO_API_KEY', '')
     spy_long = None
-    try:
-        from curl_cffi import requests as curl_requests
-        session  = curl_requests.Session(impersonate="chrome")
-        tk_spy   = yf.Ticker('SPY', session=session)
-        hist_spy = tk_spy.history(start=start_long, end=end_long,
-                                   interval='1d', auto_adjust=True,
-                                   raise_errors=False)
-        if hist_spy is not None and not hist_spy.empty:
-            hist_spy.index = pd.to_datetime(hist_spy.index).tz_localize(None)
-            spy_long = hist_spy['Close']
-            log(f"Golden Cross: downloaded {len(spy_long)} days of SPY")
-    except Exception as e:
-        log(f"Golden Cross SPY fetch failed: {e}")
+
+    if api_key:
+        try:
+            url  = (f"https://api.tiingo.com/tiingo/daily/SPY/prices"
+                    f"?startDate={start_long}&endDate={end_long}"
+                    f"&resampleFreq=daily&token={api_key}")
+            resp = _req.get(url,
+                            headers={'Authorization': f'Token {api_key}'},
+                            timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data:
+                    df_spy = pd.DataFrame(data)
+                    df_spy['date'] = pd.to_datetime(
+                        df_spy['date']).dt.tz_localize(None)
+                    df_spy = df_spy.set_index('date').sort_index()
+                    col = 'adjClose' if 'adjClose' in df_spy.columns else 'close'
+                    spy_long = df_spy[col]
+                    log(f"Golden Cross: {len(spy_long)} days of SPY from Tiingo")
+        except Exception as e:
+            log(f"Golden Cross SPY fetch failed: {e}")
 
     if spy_long is None or len(spy_long) < 50:
         log("Golden Cross: using available SPY data (MAs may be approximate)")
