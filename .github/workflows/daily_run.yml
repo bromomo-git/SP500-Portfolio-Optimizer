@@ -1,14 +1,37 @@
-name: Daily Portfolio Run (disabled — runs via Colab)
+name: Daily Portfolio Run
 
 on:
+  schedule:
+    - cron: '55 19 * * 1-5'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  run-portfolio:
+  trigger-cloud-function:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Pipeline runs via Google Colab
+
+      - name: Trigger Google Cloud Function
+        env:
+          CLOUD_FUNCTION_URL: ${{ secrets.CLOUD_FUNCTION_URL }}
+          TRIGGER_SECRET:     ${{ secrets.TRIGGER_SECRET }}
         run: |
-          echo "This pipeline runs via Google Colab + GitHub API push."
-          echo "See the Colab notebook for the active pipeline."
-          echo "Dashboard: https://bromomo-git.github.io/SP500-Portfolio-Optimizer/"
+          echo "Triggering portfolio optimization at $(date)"
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $TRIGGER_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\": \"$(date +%Y-%m-%d)\"}" \
+            "$CLOUD_FUNCTION_URL")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Cloud Function returned error status $HTTP_CODE"
+            exit 1
+          fi
+          echo "Portfolio optimization triggered successfully"
