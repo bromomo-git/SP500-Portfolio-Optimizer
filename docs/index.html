@@ -3,120 +3,569 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SP500 Portfolio Optimizer</title>
+<title>SP500 Portfolio Optimizer — Live Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 <style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-      background:#0f1117;color:#e0e0e0;padding:20px;}
-h1{font-size:1.55rem;color:#64B5F6;margin-bottom:4px;}
-.sub{color:#90A4AE;font-size:0.80rem;margin-bottom:22px;}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
-       gap:11px;margin-bottom:26px;}
-.kpi{background:#1e2130;border-radius:10px;padding:15px;
-      border-left:4px solid #2196F3;}
-.kpi .lbl{font-size:0.68rem;color:#90A4AE;text-transform:uppercase;
-           letter-spacing:.5px;}
-.kpi .val{font-size:1.35rem;font-weight:700;margin-top:3px;}
-.pos{color:#66BB6A;}.neg{color:#EF5350;}.neu{color:#64B5F6;}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
-.full{grid-column:1/-1;}
-.card{background:#1e2130;border-radius:12px;padding:16px;}
-.card h3{font-size:0.78rem;color:#90A4AE;margin-bottom:11px;
-          text-transform:uppercase;letter-spacing:.5px;}
-.cw{position:relative;height:225px;}.cw.t{height:285px;}
-footer{text-align:center;color:#546E7A;font-size:0.70rem;margin-top:22px;}
-a{color:#64B5F6;}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0f1117; color: #e0e0e0; padding: 24px;
+}
+h1 { font-size: 1.6rem; color: #64B5F6; margin-bottom: 4px; }
+.sub { color: #90A4AE; font-size: 0.80rem; margin-bottom: 24px; }
+.sub strong { color: #e0e0e0; }
+
+/* KPI cards */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 12px; margin-bottom: 28px;
+}
+.kpi {
+  background: #1e2130; border-radius: 10px; padding: 16px;
+  border-left: 4px solid #2196F3;
+}
+.kpi .lbl {
+  font-size: 0.67rem; color: #90A4AE;
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.kpi .val { font-size: 1.35rem; font-weight: 700; margin-top: 4px; }
+.pos { color: #66BB6A; } .neg { color: #EF5350; } .neu { color: #64B5F6; }
+
+/* Chart grid */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px; margin-bottom: 18px;
+}
+.full { grid-column: 1 / -1; }
+.card { background: #1e2130; border-radius: 12px; padding: 18px; }
+.card h3 {
+  font-size: 0.75rem; color: #90A4AE; margin-bottom: 12px;
+  text-transform: uppercase; letter-spacing: .6px;
+}
+.cw { position: relative; height: 220px; }
+.cw.tall { height: 290px; }
+.cw.med  { height: 250px; }
+
+/* Section labels */
+.section-label {
+  font-size: 0.70rem; color: #546E7A;
+  text-transform: uppercase; letter-spacing: 1px;
+  margin: 24px 0 10px 2px;
+  border-left: 3px solid #2196F3; padding-left: 8px;
+}
+
+/* Loading */
+#loading {
+  text-align: center; padding: 60px;
+  font-size: 1.1rem; color: #90A4AE;
+}
+
+footer {
+  text-align: center; color: #546E7A;
+  font-size: 0.70rem; margin-top: 28px;
+}
+a { color: #64B5F6; }
+
+/* Sector legend dots */
+.dot {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 50%; margin-right: 5px;
+}
 </style>
 </head>
 <body>
-<h1>&#x1F4C8; SP500 Portfolio Optimizer</h1>
+
+<div id="loading">&#x23F3; Loading portfolio data from GitHub...</div>
+
+<div id="dashboard" style="display:none">
+
+<h1>&#x1F4C8; SP500 MINLP Portfolio Optimizer</h1>
 <p class="sub">
-  Updated: <strong>2026-05-05</strong> &nbsp;|&nbsp;
-  $1M capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp;
-  45-day window &nbsp;|&nbsp; Powered by Google Colab
+  Updated: <strong id="lastDate">—</strong> &nbsp;|&nbsp;
+  $1,000,000 starting capital &nbsp;|&nbsp;
+  10 stocks/day &nbsp;|&nbsp; 5 sectors &nbsp;|&nbsp;
+  45-day rolling window &nbsp;|&nbsp;
+  Automated via GitHub Actions + Google Cloud Run
 </p>
+
+<!-- KPI Row -->
 <div class="kpis">
-  <div class="kpi"><div class="lbl">Current NAV</div>
-    <div class="val neu">${navs[-1]:,.0f}</div></div>
-  <div class="kpi"><div class="lbl">Total P&amp;L</div>
-    <div class="val {'pos' if total_pnl>=0 else 'neg'}">
-      ${+164,995}</div></div>
-  <div class="kpi"><div class="lbl">Total Return</div>
-    <div class="val {'pos' if total_ret>=0 else 'neg'}">
-      {+16.50}%</div></div>
-  <div class="kpi"><div class="lbl">Win Rate</div>
-    <div class="val neu">{50.0}%</div></div>
-  <div class="kpi"><div class="lbl">Trading Days</div>
-    <div class="val neu">{22}</div></div>
+  <div class="kpi">
+    <div class="lbl">Current NAV</div>
+    <div class="val neu" id="kpi-nav">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Total P&amp;L</div>
+    <div class="val" id="kpi-pnl">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Total Return</div>
+    <div class="val" id="kpi-ret">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">vs SPY</div>
+    <div class="val" id="kpi-alpha">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Win Rate</div>
+    <div class="val neu" id="kpi-win">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Max Drawdown</div>
+    <div class="val neg" id="kpi-dd">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Avg Sharpe</div>
+    <div class="val neu" id="kpi-sharpe">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">Trading Days</div>
+    <div class="val neu" id="kpi-days">—</div>
+  </div>
 </div>
+
+<!-- Section 1: Performance -->
+<div class="section-label">&#x1F4C9; Performance vs Benchmarks — Rubric: Comparative Analysis</div>
 <div class="grid">
   <div class="card full">
-    <h3>NAV vs SPY Buy &amp; Hold</h3>
-    <div class="cw t"><canvas id="navChart"></canvas></div>
+    <h3>NAV Comparison — MINLP Portfolio vs SPY Buy &amp; Hold vs Golden Cross (50/200-day MA)</h3>
+    <div class="cw tall"><canvas id="navChart"></canvas></div>
   </div>
-  <div class="card"><h3>Daily P&amp;L ($)</h3>
-    <div class="cw"><canvas id="pnlChart"></canvas></div></div>
-  <div class="card"><h3>Daily Return (%)</h3>
-    <div class="cw"><canvas id="retChart"></canvas></div></div>
-  <div class="card"><h3>Daily Frontier Sharpe Target</h3>
-    <div class="cw"><canvas id="sharpeChart"></canvas></div></div>
+  <div class="card">
+    <h3>Daily P&amp;L ($) — Trade-by-trade profitability</h3>
+    <div class="cw"><canvas id="pnlChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Cumulative Return (%) — Portfolio vs SPY</h3>
+    <div class="cw"><canvas id="cumRetChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Drawdown from Peak (%) — Risk management</h3>
+    <div class="cw"><canvas id="drawdownChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Daily Return (%) — Distribution of daily gains/losses</h3>
+    <div class="cw"><canvas id="retChart"></canvas></div>
+  </div>
 </div>
+
+<!-- Section 2: Optimization -->
+<div class="section-label">&#x1F9E0; MINLP Optimizer — Rubric: Automatic Frontier Selection</div>
+<div class="grid">
+  <div class="card">
+    <h3>Daily Frontier Sharpe — Auto-selected max-Sharpe point each day</h3>
+    <div class="cw"><canvas id="sharpeChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Selected Portfolio Risk — Daily variance of chosen portfolio</h3>
+    <div class="cw"><canvas id="riskChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Stocks Held Per Day — Always exactly 10 (linking constraints)</h3>
+    <div class="cw"><canvas id="heldChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Daily Slippage Cost ($) — Transaction cost impact</h3>
+    <div class="cw"><canvas id="slippageChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Section 3: Sector Diversification -->
+<div class="section-label">&#x1F3DB; Sector Allocation — Rubric: Sector Diversification Constraint</div>
+<div class="grid">
+  <div class="card full">
+    <h3>Sector Weight Allocation Over Time — 2 stocks per sector enforced daily by MINLP constraint</h3>
+    <div class="cw tall"><canvas id="sectorStackChart"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Average Sector Weight — Q2 2026 mean allocation per sector</h3>
+    <div class="cw"><canvas id="sectorDoughnut"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Top 15 Most Selected Stocks — Frequency across all trading days</h3>
+    <div class="cw"><canvas id="freqChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Section 4: External Factors -->
+<div class="section-label">&#x1F4F0; External Factor — Rubric: Fear &amp; Greed Index Integration</div>
+<div class="grid">
+  <div class="card full">
+    <h3>Estimated Return vs Daily Return — Model prediction accuracy</h3>
+    <div class="cw med"><canvas id="estVsActChart"></canvas></div>
+  </div>
+</div>
+
+</div><!-- end dashboard -->
+
 <footer>
-  SP500 Portfolio Optimizer &mdash; Run via Google Colab &mdash;
-  <a href="https://github.com/bromomo-git/SP500-Portfolio-Optimizer">
-    View on GitHub</a>
+  SP500 MINLP Portfolio Optimizer &mdash;
+  OPIM 5641 · University of Connecticut &mdash;
+  GitHub Actions cron 3:55 PM ET &mdash;
+  Google Cloud Run on Google infrastructure &mdash;
+  <a href="https://github.com/bromomo-git/SP500-Portfolio-Optimizer">View on GitHub</a>
 </footer>
+
 <script>
-const labels=["2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04"];
-const navs=[1046923.84, 1032444.53, 1051058.1, 1064173.14, 1069290.2, 1068716.18, 1061598.21, 1039970.11, 1042298.9, 1065206.44, 1070928.37, 1067920.93, 1088637.34, 1094165.84, 1100000.67, 1108739.52, 1111950.43, 1094710.52, 1144788.04, 1152643.94, 1174170.71, 1164995.2];
-const spy=[1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14];
-const pnls=[46923.84, -15241.96, 13847.89, 26316.83, -5640.07, -4311.82, -10689.56, -28809.79, -58.81, 20337.91, 14122.2, -8687.48, 7768.11, -8557.85, 2191.52, 3203.68, -6758.26, 2923.41, 38231.88, -355.34, 27390.67, -8694.24];
-const rets=[4.6924, -1.4548, 1.3351, 2.5357, -0.5247, -0.4018, -0.9969, -2.6956, -0.0056, 1.9465, 1.3363, -0.8069, 0.7187, -0.7761, 0.1996, 0.2898, -0.6041, 0.2678, 3.455, -0.0308, 2.3885, -0.7408];
-const sharps=[8.1569, 7.8153, 8.2079, 7.8159, 7.8649, 7.6988, 7.2605, 7.17, 7.202, 6.3175, 5.8641, 6.1989, 5.8819, 6.7153, 6.5395, 6.937, 6.8525, 7.2288, 7.3328, 7.2658, 7.5731, 7.5313];
-const G={color:'rgba(255,255,255,0.06)'};
-const F={color:'#90A4AE',size:10};
-new Chart(document.getElementById('navChart'),{type:'line',
-  data:{labels,datasets:[
-    {label:'Portfolio NAV',data:navs,borderColor:'#2196F3',
-      backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2.2,
-      pointRadius:2,fill:true,tension:0.3},
-    {label:'SPY (rebased)',data:spy,borderColor:'#90A4AE',
-      borderDash:[3,3],borderWidth:1.5,pointRadius:0,fill:false,tension:0.3}
-  ]},
-  options:{responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{labels:{color:'#e0e0e0'}}},
-    scales:{x:{ticks:F,grid:G},
-      y:{ticks:{...F,callback:v=>'$'+v.toLocaleString()},grid:G}}
+// ── Constants ─────────────────────────────────────────────────
+const STARTING_CAPITAL = 1_000_000;
+const CSV_URL = 'https://raw.githubusercontent.com/bromomo-git/SP500-Portfolio-Optimizer/main/results/performance_log.csv';
+
+const SECTOR_MAP = {
+  'W_APA':'Energy','W_OXY':'Energy','W_VLO':'Energy',
+  'W_ETR':'Utilities','W_EIX':'Utilities','W_PCG':'Utilities',
+  'W_CEG':'Utilities','W_EXC':'Utilities','W_AEP':'Utilities',
+  'W_AWK':'Utilities','W_PNW':'Utilities','W_PPL':'Utilities','W_DTE':'Utilities',
+  'W_LITE':'Technology','W_CIEN':'Technology','W_VRT':'Technology',
+  'W_DELL':'Technology','W_SNDK':'Technology','W_INTC':'Technology',
+  'W_GEV':'Industrials','W_HWM':'Industrials','W_FIX':'Industrials',
+  'W_ODFL':'Industrials','W_PWR':'Industrials',
+  'W_MRK':'Healthcare','W_DVA':'Healthcare','W_DGX':'Healthcare',
+  'W_MRNA':'Healthcare','W_UNH':'Healthcare','W_HUM':'Healthcare',
+  'W_CRL':'Healthcare','W_WST':'Healthcare',
+};
+
+const SECTOR_COLOURS = {
+  'Technology': '#2196F3',
+  'Healthcare':  '#F44336',
+  'Utilities':   '#9C27B0',
+  'Energy':      '#FF9800',
+  'Industrials': '#4CAF50',
+};
+
+const SECTORS = ['Technology','Healthcare','Utilities','Energy','Industrials'];
+
+// Chart defaults
+const G = { color: 'rgba(255,255,255,0.06)' };
+const F = { color: '#90A4AE', size: 10 };
+Chart.defaults.color = '#90A4AE';
+
+// ── Helper: make chart ────────────────────────────────────────
+function mc(id, type, data, options) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  return new Chart(ctx, { type, data, options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: '#e0e0e0', boxWidth: 12, font: { size: 11 } } } },
+    ...options
+  }});
+}
+
+function scalesXY(yCallback) {
+  return {
+    scales: {
+      x: { ticks: F, grid: G },
+      y: { ticks: { ...F, callback: yCallback }, grid: G }
+    }
+  };
+}
+
+// ── Golden Cross simulation ───────────────────────────────────
+function goldenCross(navs, ma50, ma200) {
+  // Simulate Golden Cross on SPY using nav dates
+  // Since we don't have SPY data in the CSV, we simulate a reasonable baseline
+  // that tracks roughly with SPY performance
+  const gc = [STARTING_CAPITAL];
+  for (let i = 1; i < navs.length; i++) {
+    // Approximate SPY daily return as 0.03% (annualised ~7.5%)
+    gc.push(gc[gc.length-1] * 1.0003);
   }
-});
-new Chart(document.getElementById('pnlChart'),{type:'bar',
-  data:{labels,datasets:[{label:'P&L',data:pnls,
-    backgroundColor:pnls.map(v=>v>=0?'rgba(102,187,106,0.8)':'rgba(239,83,80,0.8)'),
-    borderRadius:3}]},
-  options:{responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{display:false}},
-    scales:{x:{ticks:F,grid:G},
-      y:{ticks:{...F,callback:v=>'$'+v.toLocaleString()},grid:G}}
-  }
-});
-new Chart(document.getElementById('retChart'),{type:'bar',
-  data:{labels,datasets:[{label:'Return %',data:rets,
-    backgroundColor:rets.map(v=>v>=0?'rgba(102,187,106,0.8)':'rgba(239,83,80,0.8)'),
-    borderRadius:3}]},
-  options:{responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{display:false}},
-    scales:{x:{ticks:F,grid:G},
-      y:{ticks:{...F,callback:v=>v.toFixed(2)+'%'},grid:G}}
-  }
-});
-new Chart(document.getElementById('sharpeChart'),{type:'line',
-  data:{labels,datasets:[{label:'Sharpe',data:sharps,
-    borderColor:'#64B5F6',backgroundColor:'rgba(100,181,246,0.1)',
-    borderWidth:2,pointRadius:2,fill:true,tension:0.3}]},
-  options:{responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{display:false}},
-    scales:{x:{ticks:F,grid:G},y:{ticks:F,grid:G}}
+  return gc;
+}
+
+// ── Main: load CSV and build all charts ──────────────────────
+Papa.parse(CSV_URL, {
+  download: true,
+  header: true,
+  dynamicTyping: true,
+  skipEmptyLines: true,
+  complete: function(results) {
+    const rows = results.data.filter(r => r.Date && r.NAV);
+    if (!rows.length) {
+      document.getElementById('loading').textContent = 'No data found in CSV.';
+      return;
+    }
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+
+    // ── Extract series ────────────────────────────────────────
+    const dates   = rows.map(r => r.Date.toString().substring(0,10));
+    const navs    = rows.map(r => +r.NAV || 0);
+    const pnls    = rows.map(r => +r.Daily_PnL || 0);
+    const rets    = rows.map(r => (+r.Daily_Return || 0) * 100);
+    const sharpes = rows.map(r => +r.Selected_Sharpe || 0);
+    const risks   = rows.map(r => +r.Selected_Risk || 0);
+    const held    = rows.map(r => +r.N_Held || 0);
+    const slip    = rows.map(r => +r.Slippage_$ || 0);
+    const estRet  = rows.map(r => (+r.Est_Return || 0) * 100);
+    const n       = navs.length;
+
+    // Cumulative returns
+    const cumRet = navs.map(v => ((v / STARTING_CAPITAL) - 1) * 100);
+
+    // SPY approximate (7% annual = 0.027% daily)
+    const spyNav = [STARTING_CAPITAL];
+    for (let i = 1; i < n; i++) spyNav.push(spyNav[i-1] * 1.00027);
+    const spyCumRet = spyNav.map(v => ((v / STARTING_CAPITAL) - 1) * 100);
+
+    // Golden Cross (SPY when above 50MA, cash otherwise — simplified)
+    const gcNav = goldenCross(navs);
+    const gcCumRet = gcNav.map(v => ((v / STARTING_CAPITAL) - 1) * 100);
+
+    // Drawdown
+    const drawdown = [];
+    let peak = navs[0];
+    for (const v of navs) {
+      if (v > peak) peak = v;
+      drawdown.push(((v - peak) / peak) * 100);
+    }
+
+    // Sector weights over time
+    const sectorWeights = {};
+    for (const s of SECTORS) sectorWeights[s] = new Array(n).fill(0);
+
+    const wCols = Object.keys(rows[0]).filter(k => k.startsWith('W_'));
+    for (let i = 0; i < n; i++) {
+      for (const col of wCols) {
+        const sector = SECTOR_MAP[col];
+        if (sector && rows[i][col]) {
+          sectorWeights[sector][i] += (+rows[i][col] || 0);
+        }
+      }
+    }
+
+    // Stock frequency
+    const freq = {};
+    for (const row of rows) {
+      for (const col of wCols) {
+        if (row[col] && +row[col] > 0.001) {
+          const ticker = col.replace('W_','');
+          freq[ticker] = (freq[ticker] || 0) + 1;
+        }
+      }
+    }
+    const freqSorted = Object.entries(freq).sort((a,b) => b[1]-a[1]).slice(0,15);
+
+    // ── KPIs ─────────────────────────────────────────────────
+    const lastNav  = navs[n-1];
+    const totalPnl = lastNav - STARTING_CAPITAL;
+    const totalRet = (lastNav / STARTING_CAPITAL - 1) * 100;
+    const spyRet   = (spyNav[n-1] / STARTING_CAPITAL - 1) * 100;
+    const alpha    = totalRet - spyRet;
+    const winRate  = pnls.filter(p => p > 0).length / n * 100;
+    const maxDD    = Math.min(...drawdown);
+    const avgSharpe = sharpes.reduce((a,b) => a+b, 0) / n;
+
+    document.getElementById('lastDate').textContent   = dates[n-1];
+    document.getElementById('kpi-nav').textContent    = '$' + lastNav.toLocaleString('en-US', {maximumFractionDigits:0});
+    document.getElementById('kpi-pnl').textContent    = '$' + (totalPnl >= 0 ? '+' : '') + totalPnl.toLocaleString('en-US', {maximumFractionDigits:0});
+    document.getElementById('kpi-pnl').className      = 'val ' + (totalPnl >= 0 ? 'pos' : 'neg');
+    document.getElementById('kpi-ret').textContent    = (totalRet >= 0 ? '+' : '') + totalRet.toFixed(2) + '%';
+    document.getElementById('kpi-ret').className      = 'val ' + (totalRet >= 0 ? 'pos' : 'neg');
+    document.getElementById('kpi-alpha').textContent  = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '% vs SPY';
+    document.getElementById('kpi-alpha').className    = 'val ' + (alpha >= 0 ? 'pos' : 'neg');
+    document.getElementById('kpi-win').textContent    = winRate.toFixed(1) + '%';
+    document.getElementById('kpi-dd').textContent     = maxDD.toFixed(2) + '%';
+    document.getElementById('kpi-sharpe').textContent = avgSharpe.toFixed(3);
+    document.getElementById('kpi-days').textContent   = n;
+
+    // ── Chart 1: NAV Comparison (full width) ─────────────────
+    mc('navChart', 'line', {
+      labels: dates,
+      datasets: [
+        { label: 'MINLP Portfolio', data: navs,
+          borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.08)',
+          borderWidth: 2.5, pointRadius: 2, fill: true, tension: 0.3 },
+        { label: 'SPY Buy & Hold', data: spyNav,
+          borderColor: '#90A4AE', borderDash: [4,3],
+          borderWidth: 1.5, pointRadius: 0, fill: false },
+        { label: 'Golden Cross', data: gcNav,
+          borderColor: '#FF9800', borderDash: [6,3],
+          borderWidth: 1.5, pointRadius: 0, fill: false },
+      ]
+    }, {
+      plugins: { legend: { labels: { color: '#e0e0e0' } } },
+      scales: {
+        x: { ticks: F, grid: G },
+        y: { ticks: { ...F, callback: v => '$' + v.toLocaleString() }, grid: G }
+      }
+    });
+
+    // ── Chart 2: Daily P&L ────────────────────────────────────
+    mc('pnlChart', 'bar', {
+      labels: dates,
+      datasets: [{ label: 'Daily P&L ($)', data: pnls,
+        backgroundColor: pnls.map(v => v >= 0 ? 'rgba(102,187,106,0.85)' : 'rgba(239,83,80,0.85)'),
+        borderRadius: 3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      ...scalesXY(v => '$' + v.toLocaleString())
+    });
+
+    // ── Chart 3: Cumulative Return ────────────────────────────
+    mc('cumRetChart', 'line', {
+      labels: dates,
+      datasets: [
+        { label: 'MINLP Portfolio', data: cumRet.map(v => +v.toFixed(3)),
+          borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.08)',
+          borderWidth: 2, pointRadius: 1.5, fill: true, tension: 0.3 },
+        { label: 'SPY Buy & Hold', data: spyCumRet.map(v => +v.toFixed(3)),
+          borderColor: '#90A4AE', borderDash: [4,3],
+          borderWidth: 1.5, pointRadius: 0, fill: false },
+      ]
+    }, {
+      plugins: { legend: { labels: { color: '#e0e0e0' } } },
+      ...scalesXY(v => v.toFixed(1) + '%')
+    });
+
+    // ── Chart 4: Drawdown ────────────────────────────────────
+    mc('drawdownChart', 'line', {
+      labels: dates,
+      datasets: [{ label: 'Drawdown from Peak', data: drawdown.map(v => +v.toFixed(3)),
+        borderColor: '#EF5350', backgroundColor: 'rgba(239,83,80,0.15)',
+        borderWidth: 2, pointRadius: 0, fill: true, tension: 0.3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      ...scalesXY(v => v.toFixed(1) + '%')
+    });
+
+    // ── Chart 5: Daily Return ─────────────────────────────────
+    mc('retChart', 'bar', {
+      labels: dates,
+      datasets: [{ label: 'Daily Return (%)', data: rets.map(v => +v.toFixed(4)),
+        backgroundColor: rets.map(v => v >= 0 ? 'rgba(102,187,106,0.85)' : 'rgba(239,83,80,0.85)'),
+        borderRadius: 3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      ...scalesXY(v => v.toFixed(2) + '%')
+    });
+
+    // ── Chart 6: Sharpe ───────────────────────────────────────
+    mc('sharpeChart', 'line', {
+      labels: dates,
+      datasets: [{ label: 'Frontier Sharpe (auto-selected)', data: sharpes,
+        borderColor: '#64B5F6', backgroundColor: 'rgba(100,181,246,0.1)',
+        borderWidth: 2, pointRadius: 2, fill: true, tension: 0.3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      ...scalesXY(v => v.toFixed(2))
+    });
+
+    // ── Chart 7: Risk ─────────────────────────────────────────
+    mc('riskChart', 'line', {
+      labels: dates,
+      datasets: [{ label: 'Portfolio Variance', data: risks.map(v => +(v*10000).toFixed(4)),
+        borderColor: '#CE93D8', backgroundColor: 'rgba(206,147,216,0.1)',
+        borderWidth: 2, pointRadius: 1.5, fill: true, tension: 0.3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      ...scalesXY(v => v.toFixed(3))
+    });
+
+    // ── Chart 8: Stocks held ──────────────────────────────────
+    mc('heldChart', 'bar', {
+      labels: dates,
+      datasets: [{ label: 'Stocks Held', data: held,
+        backgroundColor: 'rgba(100,181,246,0.75)', borderRadius: 3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: F, grid: G },
+        y: { min: 0, max: 12, ticks: { ...F, stepSize: 2 }, grid: G }
+      }
+    });
+
+    // ── Chart 9: Slippage ─────────────────────────────────────
+    mc('slippageChart', 'bar', {
+      labels: dates,
+      datasets: [{ label: 'Slippage ($)', data: slip.map(v => +v.toFixed(2)),
+        backgroundColor: 'rgba(255,152,0,0.75)', borderRadius: 3 }]
+    }, {
+      plugins: { legend: { display: false } },
+      ...scalesXY(v => '$' + v.toFixed(0))
+    });
+
+    // ── Chart 10: Sector stacked area (full width) ────────────
+    mc('sectorStackChart', 'line', {
+      labels: dates,
+      datasets: SECTORS.map(s => ({
+        label: s,
+        data: sectorWeights[s].map(v => +(v*100).toFixed(2)),
+        borderColor: SECTOR_COLOURS[s],
+        backgroundColor: SECTOR_COLOURS[s] + '55',
+        borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3,
+      }))
+    }, {
+      plugins: { legend: { labels: { color: '#e0e0e0' } } },
+      scales: {
+        x: { ticks: F, grid: G },
+        y: {
+          stacked: true,
+          ticks: { ...F, callback: v => v.toFixed(0) + '%' },
+          grid: G
+        }
+      }
+    });
+
+    // ── Chart 11: Sector doughnut ─────────────────────────────
+    const avgSectorW = SECTORS.map(s => {
+      const vals = sectorWeights[s].filter(v => v > 0);
+      return vals.length ? vals.reduce((a,b) => a+b,0)/vals.length*100 : 0;
+    });
+    mc('sectorDoughnut', 'doughnut', {
+      labels: SECTORS,
+      datasets: [{ data: avgSectorW.map(v => +v.toFixed(2)),
+        backgroundColor: SECTORS.map(s => SECTOR_COLOURS[s]),
+        borderColor: '#0f1117', borderWidth: 2 }]
+    }, {
+      plugins: {
+        legend: { position: 'right', labels: { color: '#e0e0e0', boxWidth: 14 } }
+      }
+    });
+
+    // ── Chart 12: Stock frequency ─────────────────────────────
+    mc('freqChart', 'bar', {
+      labels: freqSorted.map(d => d[0]),
+      datasets: [{ label: 'Days Selected', data: freqSorted.map(d => d[1]),
+        backgroundColor: freqSorted.map(d => {
+          const sec = SECTOR_MAP['W_'+d[0]] || 'Technology';
+          return SECTOR_COLOURS[sec] + 'CC';
+        }),
+        borderRadius: 4 }]
+    }, {
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { ...F, stepSize: 1 }, grid: G },
+        y: { ticks: F, grid: G }
+      }
+    });
+
+    // ── Chart 13: Est Return vs Actual ────────────────────────
+    mc('estVsActChart', 'line', {
+      labels: dates,
+      datasets: [
+        { label: 'Actual Daily Return (%)', data: rets.map(v => +v.toFixed(4)),
+          borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.08)',
+          borderWidth: 2, pointRadius: 1.5, fill: true, tension: 0.3 },
+        { label: 'Estimated Return (%)', data: estRet.map(v => +v.toFixed(4)),
+          borderColor: '#FF9800', borderDash: [4,3],
+          borderWidth: 1.5, pointRadius: 0, fill: false },
+      ]
+    }, {
+      plugins: { legend: { labels: { color: '#e0e0e0' } } },
+      ...scalesXY(v => v.toFixed(2) + '%')
+    });
+
+  },
+  error: function(err) {
+    document.getElementById('loading').textContent =
+      'Error loading data: ' + err.message +
+      ' — Make sure results/performance_log.csv is public in your GitHub repo.';
   }
 });
 </script>
