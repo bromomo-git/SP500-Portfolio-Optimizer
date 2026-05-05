@@ -23,40 +23,24 @@ h1{font-size:1.6rem;color:#64B5F6;margin-bottom:4px;}
 .cw{position:relative;height:220px;}.cw.tall{height:300px;}.cw.med{height:250px;}
 .section-label{font-size:0.70rem;color:#90A4AE;text-transform:uppercase;letter-spacing:1px;
   margin:24px 0 10px 2px;border-left:3px solid #2196F3;padding-left:8px;}
-.fg-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-weight:600;
-  font-size:0.82rem;background:#90A4AE22;color:#90A4AE;
-  border:1px solid #90A4AE;margin-left:8px;}
+.fg-badge{display:inline-block;padding:3px 10px;border-radius:20px;font-weight:600;font-size:0.82rem;background:#90A4AE22;color:#90A4AE;border:1px solid #90A4AE;margin-left:8px;}
 footer{text-align:center;color:#546E7A;font-size:0.70rem;margin-top:28px;}
 a{color:#64B5F6;}
 </style>
 </head>
 <body>
-<h1>&#x1F4C8; SP500 MINLP Portfolio Optimizer
-  <span class="fg-badge">&#x1F9E0; greed (62)</span>
-</h1>
-<p class="sub">
-  Updated: <strong>2026-05-05</strong> &nbsp;|&nbsp;
-  $1,000,000 starting capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp; 5 sectors &nbsp;|&nbsp;
-  45-day rolling window &nbsp;|&nbsp; 22 frontier solves/day &nbsp;|&nbsp;
-  Risk multiplier: <strong>1.25&times;</strong>
-</p>
+<h1>&#x1F4C8; SP500 MINLP Portfolio Optimizer <span class="fg-badge">&#x1F9E0; greed (62)</span></h1>
+<p class="sub">Updated: <strong>2026-05-05</strong> &nbsp;|&nbsp; $1,000,000 starting capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp; 5 sectors &nbsp;|&nbsp; 45-day rolling window &nbsp;|&nbsp; Risk multiplier: <strong>1.25&times;</strong></p>
 <div class="kpis">
-  <div class="kpi"><div class="lbl">Current NAV</div>
-    <div class="val neu">${1,164,995}</div></div>
-  <div class="kpi"><div class="lbl">Total P&amp;L</div>
-    <div class="val pos">${+164,995}</div></div>
-  <div class="kpi"><div class="lbl">Total Return</div>
-    <div class="val pos">{+16.50}%</div></div>
-  <div class="kpi"><div class="lbl">vs SPY Alpha</div>
-    <div class="val pos">{+7.02}%</div></div>
-  <div class="kpi"><div class="lbl">Win Rate</div>
-    <div class="val neu">{50.0}%</div></div>
-  <div class="kpi"><div class="lbl">Max Drawdown</div>
-    <div class="val neg">{-2.74}%</div></div>
-  <div class="kpi"><div class="lbl">Avg Sharpe</div>
-    <div class="val neu">{7.156}</div></div>
-  <div class="kpi"><div class="lbl">Trading Days</div>
-    <div class="val neu">{22}</div></div>
+<div class="kpi"><div class="lbl">Current NAV</div><div class="val neu">$1,164,995</div></div>
+<div class="kpi"><div class="lbl">Total P&amp;L</div><div class="val pos">$+164,995</div></div>
+<div class="kpi"><div class="lbl">Total Return</div><div class="val pos">+16.50%</div></div>
+<div class="kpi"><div class="lbl">vs SPY Alpha</div><div class="val pos">+7.02%</div></div>
+<div class="kpi"><div class="lbl">Win Rate</div><div class="val neu">50.0%</div></div>
+<div class="kpi"><div class="lbl">Max Drawdown</div><div class="val neg">-2.74%</div></div>
+<div class="kpi"><div class="lbl">Avg Sharpe</div><div class="val neu">7.156</div></div>
+<div class="kpi"><div class="lbl">Trading Days</div><div class="val neu">22</div></div>
+
 </div>
 
 <div class="section-label">&#x1F4C9; Performance vs Benchmarks &#x2014; Rubric: Comparative Analysis</div>
@@ -102,7 +86,7 @@ a{color:#64B5F6;}
 <div class="section-label">&#x1F4F0; External Factor &#x2014; Rubric: Fear &amp; Greed Index Integration</div>
 <div class="grid">
   <div class="card full">
-    <h3>Estimated Return vs Actual Daily Return &#x2014; Optimizer signal accuracy (Fear &amp; Greed: greed = 1.25&times; risk multiplier applied)</h3>
+    <h3>Estimated Return vs Actual Daily Return &#x2014; Optimizer signal accuracy</h3>
     <div class="cw med"><canvas id="estVsActChart"></canvas></div>
   </div>
 </div>
@@ -118,38 +102,30 @@ const G={color:'rgba(255,255,255,0.06)'};
 const F={color:'#90A4AE',size:10};
 Chart.defaults.color='#90A4AE';
 
-const labels   = ["2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04"];
-const navs     = [1046923.84, 1032444.53, 1051058.1, 1064173.14, 1069290.2, 1068716.18, 1061598.21, 1039970.11, 1042298.9, 1065206.44, 1070928.37, 1067920.93, 1088637.34, 1094165.84, 1100000.67, 1108739.52, 1111950.43, 1094710.52, 1144788.04, 1152643.94, 1174170.71, 1164995.2];
-const spyBH    = [1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14];
-const gcNavs   = [1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14];
-const pnls     = [46923.84, -15241.96, 13847.89, 26316.83, -5640.07, -4311.82, -10689.56, -28809.79, -58.81, 20337.91, 14122.2, -8687.48, 7768.11, -8557.85, 2191.52, 3203.68, -6758.26, 2923.41, 38231.88, -355.34, 27390.67, -8694.24];
-const rets     = [4.6924, -1.4548, 1.3351, 2.5357, -0.5247, -0.4018, -0.9969, -2.6956, -0.0056, 1.9465, 1.3363, -0.8069, 0.7187, -0.7761, 0.1996, 0.2898, -0.6041, 0.2678, 3.455, -0.0308, 2.3885, -0.7408];
-const sharps   = [8.1569, 7.8153, 8.2079, 7.8159, 7.8649, 7.6988, 7.2605, 7.17, 7.202, 6.3175, 5.8641, 6.1989, 5.8819, 6.7153, 6.5395, 6.937, 6.8525, 7.2288, 7.3328, 7.2658, 7.5731, 7.5313];
-const risks    = [5.4717, 5.4736, 5.2184, 5.4472, 5.638, 5.7982, 5.8424, 5.9294, 5.9501, 5.6508, 5.608, 5.7082, 5.7297, 5.7787, 5.8874, 5.7574, 5.7215, 5.6394, 5.6094, 5.6651, 5.7766, 5.8374];
-const held     = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
-const slip     = [100.0, 6.21, 12.28, 29.41, 12.58, 33.19, 18.68, 76.07, 40.64, 37.93, 44.61, 50.08, 86.26, 72.94, 30.35, 50.41, 50.03, 98.25, 19.99, 26.68, 27.14, 42.81];
-const estRet   = [1.202, 1.1518, 1.1811, 1.1491, 1.1764, 1.1678, 1.1055, 1.0998, 1.1067, 0.946, 0.8748, 0.933, 0.8869, 1.0169, 0.9996, 1.0485, 1.0325, 1.0814, 1.094, 1.0894, 1.1466, 1.1463];
-const cumRet   = [4.6924, 3.2445, 5.1058, 6.4173, 6.929, 6.8716, 6.1598, 3.997, 4.2299, 6.5206, 7.0928, 6.7921, 8.8637, 9.4166, 10.0001, 10.874, 11.195, 9.4711, 14.4788, 15.2644, 17.4171, 16.4995];
-const spyCumRet= [0.0, 0.4727, 0.5169, 3.077, 3.6717, 3.6031, 4.6155, 5.8902, 6.7258, 6.9881, 8.2811, 8.0646, 7.3571, 8.4443, 8.0234, 8.8605, 9.0481, 8.5174, 8.5007, 9.5802, 9.8837, 9.4811];
-const drawdown = [0.0, -1.383, 0.0, 0.0, 0.0, -0.0537, -0.7194, -2.742, -2.5242, -0.3819, 0.0, -0.2808, 0.0, 0.0, 0.0, 0.0, 0.0, -1.5504, 0.0, 0.0, 0.0, -0.7814];
+const labels=["2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04"];
+const navs=[1046923.84, 1032444.53, 1051058.1, 1064173.14, 1069290.2, 1068716.18, 1061598.21, 1039970.11, 1042298.9, 1065206.44, 1070928.37, 1067920.93, 1088637.34, 1094165.84, 1100000.67, 1108739.52, 1111950.43, 1094710.52, 1144788.04, 1152643.94, 1174170.71, 1164995.2];
+const spyBH=[1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14];
+const gcNavs=[1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14];
+const pnls=[46923.84, -15241.96, 13847.89, 26316.83, -5640.07, -4311.82, -10689.56, -28809.79, -58.81, 20337.91, 14122.2, -8687.48, 7768.11, -8557.85, 2191.52, 3203.68, -6758.26, 2923.41, 38231.88, -355.34, 27390.67, -8694.24];
+const rets=[4.6924, -1.4548, 1.3351, 2.5357, -0.5247, -0.4018, -0.9969, -2.6956, -0.0056, 1.9465, 1.3363, -0.8069, 0.7187, -0.7761, 0.1996, 0.2898, -0.6041, 0.2678, 3.455, -0.0308, 2.3885, -0.7408];
+const sharps=[8.1569, 7.8153, 8.2079, 7.8159, 7.8649, 7.6988, 7.2605, 7.17, 7.202, 6.3175, 5.8641, 6.1989, 5.8819, 6.7153, 6.5395, 6.937, 6.8525, 7.2288, 7.3328, 7.2658, 7.5731, 7.5313];
+const risks=[5.4717, 5.4736, 5.2184, 5.4472, 5.638, 5.7982, 5.8424, 5.9294, 5.9501, 5.6508, 5.608, 5.7082, 5.7297, 5.7787, 5.8874, 5.7574, 5.7215, 5.6394, 5.6094, 5.6651, 5.7766, 5.8374];
+const held=[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
+const slip=[100.0, 6.21, 12.28, 29.41, 12.58, 33.19, 18.68, 76.07, 40.64, 37.93, 44.61, 50.08, 86.26, 72.94, 30.35, 50.41, 50.03, 98.25, 19.99, 26.68, 27.14, 42.81];
+const estRet=[1.202, 1.1518, 1.1811, 1.1491, 1.1764, 1.1678, 1.1055, 1.0998, 1.1067, 0.946, 0.8748, 0.933, 0.8869, 1.0169, 0.9996, 1.0485, 1.0325, 1.0814, 1.094, 1.0894, 1.1466, 1.1463];
+const cumRet=[4.6924, 3.2445, 5.1058, 6.4173, 6.929, 6.8716, 6.1598, 3.997, 4.2299, 6.5206, 7.0928, 6.7921, 8.8637, 9.4166, 10.0001, 10.874, 11.195, 9.4711, 14.4788, 15.2644, 17.4171, 16.4995];
+const spyCumRet=[0.0, 0.4727, 0.5169, 3.077, 3.6717, 3.6031, 4.6155, 5.8902, 6.7258, 6.9881, 8.2811, 8.0646, 7.3571, 8.4443, 8.0234, 8.8605, 9.0481, 8.5174, 8.5007, 9.5802, 9.8837, 9.4811];
+const drawdown=[0.0, -1.383, 0.0, 0.0, 0.0, -0.0537, -0.7194, -2.742, -2.5242, -0.3819, 0.0, -0.2808, 0.0, 0.0, 0.0, 0.0, 0.0, -1.5504, 0.0, 0.0, 0.0, -0.7814];
+const secTech=[NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
+const secHcare=[NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
+const secUtil=[NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
+const secEnerg=[NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
+const secIndus=[NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
+const freqLabels=["APA", "ETR", "VRT", "OXY", "CIEN", "GEV", "MRNA", "UNH", "DELL", "LITE", "DVA", "EIX", "FIX", "PNW", "INTC"];
+const freqCounts=[22, 21, 19, 17, 16, 14, 12, 12, 12, 8, 8, 7, 7, 6, 5];
+const freqColours=["#FF9800", "#9C27B0", "#2196F3", "#FF9800", "#2196F3", "#4CAF50", "#F44336", "#F44336", "#2196F3", "#2196F3", "#F44336", "#9C27B0", "#4CAF50", "#9C27B0", "#2196F3"];
+const avgSecW=[NaN, NaN, NaN, NaN, NaN];
 
-const secTech  = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
-const secHcare = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
-const secUtil  = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
-const secEnerg = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
-const secIndus = [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN];
-
-const freqLabels  = ["APA", "ETR", "VRT", "OXY", "CIEN", "GEV", "MRNA", "UNH", "DELL", "LITE", "DVA", "EIX", "FIX", "PNW", "INTC"];
-const freqCounts  = [22, 21, 19, 17, 16, 14, 12, 12, 12, 8, 8, 7, 7, 6, 5];
-const freqColours = ["#FF9800", "#9C27B0", "#2196F3", "#FF9800", "#2196F3", "#4CAF50", "#F44336", "#F44336", "#2196F3", "#2196F3", "#F44336", "#9C27B0", "#4CAF50", "#9C27B0", "#2196F3"];
-
-const avgSecW = [
-  nan,
-  nan,
-  nan,
-  nan,
-  nan
-];
 
 function mkChart(id,type,data,opts){
   const ctx=document.getElementById(id);
@@ -158,10 +134,8 @@ function mkChart(id,type,data,opts){
     plugins:{legend:{labels:{color:'#e0e0e0',boxWidth:12,font:{size:11}}}},
     ...opts}});
 }
-
 function xy(yCb){return{scales:{x:{ticks:F,grid:G},y:{ticks:{...F,callback:yCb},grid:G}}};}
 
-// 1. NAV comparison
 mkChart('navChart','line',{labels,datasets:[
   {label:'MINLP Portfolio',data:navs,borderColor:'#2196F3',
     backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2.5,pointRadius:2,fill:true,tension:0.3},
@@ -171,12 +145,10 @@ mkChart('navChart','line',{labels,datasets:[
     borderDash:[6,3],borderWidth:1.8,pointRadius:0,fill:false,tension:0.3},
 ]},{...xy(v=>'$'+v.toLocaleString())});
 
-// 2. Daily P&L
 mkChart('pnlChart','bar',{labels,datasets:[{label:'P&L',data:pnls,
   backgroundColor:pnls.map(v=>v>=0?'rgba(102,187,106,0.85)':'rgba(239,83,80,0.85)'),
   borderRadius:3}]},{plugins:{legend:{display:false}},...xy(v=>'$'+v.toLocaleString())});
 
-// 3. Cumulative return
 mkChart('cumRetChart','line',{labels,datasets:[
   {label:'MINLP Portfolio',data:cumRet,borderColor:'#2196F3',
     backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2,pointRadius:1.5,fill:true,tension:0.3},
@@ -184,58 +156,42 @@ mkChart('cumRetChart','line',{labels,datasets:[
     borderDash:[4,3],borderWidth:1.5,pointRadius:0,fill:false},
 ]},{...xy(v=>v.toFixed(1)+'%')});
 
-// 4. Drawdown
 mkChart('drawdownChart','line',{labels,datasets:[{label:'Drawdown',data:drawdown,
   borderColor:'#EF5350',backgroundColor:'rgba(239,83,80,0.15)',
   borderWidth:2,pointRadius:0,fill:true,tension:0.3}]},
 {plugins:{legend:{display:false}},...xy(v=>v.toFixed(1)+'%')});
 
-// 5. Daily return
 mkChart('retChart','bar',{labels,datasets:[{label:'Return %',data:rets,
   backgroundColor:rets.map(v=>v>=0?'rgba(102,187,106,0.85)':'rgba(239,83,80,0.85)'),
   borderRadius:3}]},{plugins:{legend:{display:false}},...xy(v=>v.toFixed(2)+'%')});
 
-// 6. Sharpe
 mkChart('sharpeChart','line',{labels,datasets:[{label:'Frontier Sharpe',data:sharps,
   borderColor:'#64B5F6',backgroundColor:'rgba(100,181,246,0.1)',
   borderWidth:2,pointRadius:2,fill:true,tension:0.3}]},
 {plugins:{legend:{display:false}},...xy(v=>v.toFixed(2))});
 
-// 7. Risk
-mkChart('riskChart','line',{labels,datasets:[{label:'Portfolio Variance ×10k',data:risks,
+mkChart('riskChart','line',{labels,datasets:[{label:'Variance x10k',data:risks,
   borderColor:'#CE93D8',backgroundColor:'rgba(206,147,216,0.1)',
   borderWidth:2,pointRadius:1.5,fill:true,tension:0.3}]},
 {plugins:{legend:{display:false}},...xy(v=>v.toFixed(3))});
 
-// 8. Stocks held
 mkChart('heldChart','bar',{labels,datasets:[{label:'Stocks Held',data:held,
   backgroundColor:'rgba(100,181,246,0.75)',borderRadius:3}]},
 {plugins:{legend:{display:false}},scales:{
   x:{ticks:F,grid:G},y:{min:0,max:12,ticks:{...F,stepSize:2},grid:G}}});
 
-// 9. Slippage
 mkChart('slippageChart','bar',{labels,datasets:[{label:'Slippage $',data:slip,
   backgroundColor:'rgba(255,152,0,0.75)',borderRadius:3}]},
 {plugins:{legend:{display:false}},...xy(v=>'$'+v.toFixed(0))});
 
-// 10. Sector stacked area
 mkChart('sectorStackChart','line',{labels,datasets:[
-  {label:'Technology',data:secTech,borderColor:'#2196F3',backgroundColor:'#2196F355',
-    borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
-  {label:'Healthcare',data:secHcare,borderColor:'#F44336',backgroundColor:'#F4433655',
-    borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
-  {label:'Utilities',data:secUtil,borderColor:'#9C27B0',backgroundColor:'#9C27B055',
-    borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
-  {label:'Energy',data:secEnerg,borderColor:'#FF9800',backgroundColor:'#FF980055',
-    borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
-  {label:'Industrials',data:secIndus,borderColor:'#4CAF50',backgroundColor:'#4CAF5055',
-    borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
-]},{scales:{
-  x:{ticks:F,grid:G},
-  y:{stacked:false,min:0,max:100,ticks:{...F,callback:v=>v+'%'},grid:G}
-}});
+  {label:'Technology',data:secTech,borderColor:'#2196F3',backgroundColor:'#2196F355',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Healthcare', data:secHcare,borderColor:'#F44336',backgroundColor:'#F4433655',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Utilities',  data:secUtil, borderColor:'#9C27B0',backgroundColor:'#9C27B055',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Energy',     data:secEnerg,borderColor:'#FF9800',backgroundColor:'#FF980055',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Industrials',data:secIndus,borderColor:'#4CAF50',backgroundColor:'#4CAF5055',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+]},{scales:{x:{ticks:F,grid:G},y:{stacked:false,min:0,max:100,ticks:{...F,callback:v=>v+'%'},grid:G}}});
 
-// 11. Sector doughnut
 mkChart('sectorDoughnut','doughnut',{
   labels:['Technology','Healthcare','Utilities','Energy','Industrials'],
   datasets:[{data:avgSecW,
@@ -243,15 +199,12 @@ mkChart('sectorDoughnut','doughnut',{
     borderColor:'#0f1117',borderWidth:2}]},
 {plugins:{legend:{position:'right',labels:{color:'#e0e0e0',boxWidth:14}}}});
 
-// 12. Stock frequency (horizontal bar)
-mkChart('freqChart','bar',{
-  labels:freqLabels,
+mkChart('freqChart','bar',{labels:freqLabels,
   datasets:[{label:'Days Selected',data:freqCounts,
     backgroundColor:freqColours,borderRadius:4}]},
 {indexAxis:'y',plugins:{legend:{display:false}},
   scales:{x:{ticks:{...F,stepSize:1},grid:G},y:{ticks:F,grid:G}}});
 
-// 13. Est return vs actual
 mkChart('estVsActChart','line',{labels,datasets:[
   {label:'Actual Daily Return (%)',data:rets,borderColor:'#2196F3',
     backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2,pointRadius:1.5,fill:true,tension:0.3},
