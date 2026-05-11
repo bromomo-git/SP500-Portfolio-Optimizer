@@ -1,0 +1,921 @@
+"""
+SP500 Portfolio Logic — Google Cloud Run
+=========================================
+Triggered by GitHub Actions at 3:55 PM ET every trading day.
+Runs on Google infrastructure — Yahoo Finance works perfectly.
+
+Pushes 4 files to GitHub every run:
+  results/performance_log.csv  — daily NAV, returns, weights
+  results/trade_log.csv        — every trade with full detail
+  data/portfolio_state.json    — current positions + holdings
+  docs/index.html              — live dashboard
+"""
+
+import os
+import io
+import json
+import base64
+import warnings
+import urllib.request
+from datetime import date, timedelta, datetime
+
+import numpy as np
+import pandas as pd
+import yfinance as yf
+import matplotlib
+matplotlib.use('Agg')
+import requests as _req
+
+from sklearn.covariance import LedoitWolf
+from pyomo.environ import (
+    ConcreteModel, Var, Objective, Constraint, ConstraintList,
+    NonNegativeReals, Binary, maximize, value, SolverFactory
+)
+from pyomo.opt import TerminationCondition
+
+warnings.filterwarnings('ignore')
+
+# ── Configuration ─────────────────────────────────────────────
+STARTING_CAPITAL = 1_000_000.00
+LOOKBACK         = 45
+TOP_N            = 100
+N_STOCKS         = 10
+N_PER_SECTOR     = 2
+WEIGHT_MIN       = 0.05
+WEIGHT_MAX       = 0.50
+N_SWEEP          = 6
+FRONTIER_TL      = 60
+SLIPPAGE_PCT     = 0.0001
+
+TARGET_SECTORS = [
+    'Information Technology',
+    'Health Care',
+    'Utilities',
+    'Energy',
+    'Industrials',
+]
+SECTOR_SHORT = {
+    'Information Technology': 'Technology',
+    'Health Care':            'Healthcare',
+    'Utilities':              'Utilities',
+    'Energy':                 'Energy',
+    'Industrials':            'Industrials',
+}
+
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO  = 'bromomo-git/SP500-Portfolio-Optimizer'
+GITHUB_NAME  = 'Cloud Function Auto-Push'
+GITHUB_EMAIL = 'bromomo-git@users.noreply.github.com'
+BONMIN_PATH  = 'bonmin'
+
+
+# ══════════════════════════════════════════════════════════════
+#  UTILITIES
+# ══════════════════════════════════════════════════════════════
+
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def fetch_from_github(path):
+    """Fetch a file from GitHub. Returns (content_str, sha) or (None, None)."""
+    if not GITHUB_TOKEN:
+        return None, None
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept':        'application/vnd.github.v3+json',
+    }
+    resp = _req.get(
+        f'https://api.github.com/repos/{GITHUB_REPO}/contents/{path}',
+        headers=headers
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        return base64.b64decode(data['content']).decode(), data.get('sha')
+    return None, None
+
+
+def push_to_github(path, content_str, message):
+    """Push a file to GitHub. Fetches current SHA automatically."""
+    if not GITHUB_TOKEN:
+        log(f"WARNING: GITHUB_TOKEN not set — skipping {path}")
+        return False
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept':        'application/vnd.github.v3+json',
+    }
+    _, sha = fetch_from_github(path)
+    payload = {
+        'message':   message,
+        'content':   base64.b64encode(content_str.encode()).decode(),
+        'committer': {'name': GITHUB_NAME, 'email': GITHUB_EMAIL},
+    }
+    if sha:
+        payload['sha'] = sha
+    resp = _req.put(
+        f'https://api.github.com/repos/{GITHUB_REPO}/contents/{path}',
+        headers=headers, json=payload
+    )
+    if resp.status_code in (200, 201):
+        log(f"  ✓ {path}")
+        return True
+    log(f"  ✗ {path}: {resp.status_code} {resp.text[:100]}")
+    return False
+
+
+# ══════════════════════════════════════════════════════════════
+#  UNIVERSE
+# ══════════════════════════════════════════════════════════════
+
+def build_universe():
+    log("Scraping S&P 500 from Wikipedia...")
+    url     = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                      'AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+    }
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as r:
+        html = r.read()
+    tables  = pd.read_html(html)
+    sp500   = tables[0][['Symbol', 'GICS Sector']].copy()
+    sp500.columns = ['Ticker', 'Sector']
+    sp500['Ticker'] = sp500['Ticker'].str.replace('.', '-', regex=False)
+    universe = sp500[sp500['Sector'].isin(TARGET_SECTORS)].copy()
+    universe['SectorShort'] = universe['Sector'].map(SECTOR_SHORT)
+    ticker_sector = dict(zip(universe['Ticker'], universe['SectorShort']))
+    all_tickers   = universe['Ticker'].tolist()
+    log(f"Universe: {len(all_tickers)} stocks across {len(TARGET_SECTORS)} sectors")
+    return all_tickers, ticker_sector
+
+
+# ══════════════════════════════════════════════════════════════
+#  DATA DOWNLOAD
+# ══════════════════════════════════════════════════════════════
+
+def download_data(all_tickers, ticker_sector):
+    start = (date.today() - timedelta(days=75)).strftime('%Y-%m-%d')
+    end   = (date.today() + timedelta(days=1)).strftime('%Y-%m-%d')
+    fetch = all_tickers + ['SPY', '^VIX']
+    log(f"Downloading {len(fetch)} tickers ({start} to {end})...")
+    raw = yf.download(
+        fetch, start=start, end=end,
+        auto_adjust=True, progress=False, interval='1d'
+    )
+    close_all  = raw['Close'].ffill().bfill()
+    open_all   = raw['Open'].ffill().bfill()
+    volume_all = raw['Volume'].ffill().bfill()
+    spy_close = close_all['SPY'].copy() if 'SPY' in close_all.columns else None
+    vix_close = close_all['^VIX'].copy() if '^VIX' in close_all.columns else None
+    avail = close_all[all_tickers]
+    bad   = avail.columns[(avail.isnull().mean() > 0.20)].tolist()
+    if bad:
+        log(f"Dropped {len(bad)} tickers (>20% missing)")
+        all_tickers   = [t for t in all_tickers if t not in bad]
+        ticker_sector = {t: s for t, s in ticker_sector.items() if t not in bad}
+    close_px  = close_all[all_tickers].copy()
+    open_px   = open_all[all_tickers].copy()
+    volume_px = volume_all[all_tickers].copy()
+    daily_ret = close_px.pct_change().dropna(how='all')
+    log(f"Download complete — {len(daily_ret)} days, {len(all_tickers)} stocks")
+    return (close_px, open_px, volume_px, daily_ret,
+            spy_close, vix_close, all_tickers, ticker_sector)
+
+
+# ══════════════════════════════════════════════════════════════
+#  FILTER
+# ══════════════════════════════════════════════════════════════
+
+def daily_filter(daily_ret, volume_px, ticker_sector, day_idx):
+    if day_idx < LOOKBACK:
+        return [], {}
+    window_ret = daily_ret.iloc[day_idx - LOOKBACK: day_idx]
+    window_vol = volume_px.iloc[day_idx - LOOKBACK: day_idx]
+    cum_ret    = (1 + window_ret).prod() - 1
+    rel_vol    = window_vol.iloc[-5:].mean() / window_vol.mean().replace(0, np.nan)
+    vol_std    = window_ret.std() * np.sqrt(252)
+    score      = (cum_ret * rel_vol) / vol_std.replace(0, np.nan)
+    score      = score.dropna()
+    score      = score[score.index.map(lambda t: ticker_sector.get(t) is not None)]
+    sc         = pd.Series({t: ticker_sector[t] for t in score.index}).value_counts()
+    valid      = sc[sc >= N_PER_SECTOR].index.tolist()
+    score      = score[score.index.map(lambda t: ticker_sector[t] in valid)]
+    top        = score.nlargest(TOP_N).index.tolist()
+    return top, {t: ticker_sector[t] for t in top}
+
+
+# ══════════════════════════════════════════════════════════════
+#  OPTIMIZER
+# ══════════════════════════════════════════════════════════════
+
+def estimate_params(daily_ret, tickers, day_idx):
+    window   = daily_ret[tickers].iloc[day_idx - LOOKBACK: day_idx].copy()
+    window   = window.fillna(window.mean())
+    mean_ret = window.mean()
+    lw       = LedoitWolf().fit(window.values)
+    cov_df   = pd.DataFrame(lw.covariance_, index=tickers, columns=tickers)
+    return mean_ret, cov_df
+
+
+def solve_portfolio(mean_ret, cov_matrix, sector_map, risk_limit, warm_start=None):
+    tickers     = mean_ret.index.tolist()
+    sectors     = list(set(sector_map.values()))
+    sec_tickers = {s: [t for t in tickers if sector_map.get(t) == s]
+                   for s in sectors}
+    for s in sectors:
+        if len(sec_tickers[s]) < N_PER_SECTOR:
+            return None, None
+    m   = ConcreteModel()
+    m.x = Var(tickers, domain=NonNegativeReals, bounds=(0.0, 1.0))
+    m.y = Var(tickers, domain=Binary)
+    if warm_start:
+        for t in tickers:
+            if t in warm_start:
+                m.y[t].set_value(1 if warm_start[t] > 1e-4 else 0)
+                m.x[t].set_value(float(warm_start[t]))
+    m.obj = Objective(
+        expr=sum(m.x[t] * float(mean_ret[t]) for t in tickers),
+        sense=maximize
+    )
+    m.sum_w    = Constraint(expr=sum(m.x[t] for t in tickers) == 1.0)
+    m.n_stocks = Constraint(expr=sum(m.y[t] for t in tickers) == N_STOCKS)
+    m.cap      = Constraint(tickers, rule=lambda m, t: m.x[t] <= WEIGHT_MAX * m.y[t])
+    m.floor    = Constraint(tickers, rule=lambda m, t: m.x[t] >= WEIGHT_MIN * m.y[t])
+    m.sector_exact = ConstraintList()
+    for s in sectors:
+        m.sector_exact.add(sum(m.y[t] for t in sec_tickers[s]) == N_PER_SECTOR)
+    risk_expr = sum(
+        m.x[t1] * float(cov_matrix.at[t1, t2]) * m.x[t2]
+        for t1 in tickers for t2 in tickers
+    )
+    m.risk = Constraint(expr=risk_expr <= risk_limit)
+    solver = SolverFactory('bonmin', executable=BONMIN_PATH)
+    solver.options['bonmin.time_limit'] = FRONTIER_TL
+    solver.options['bonmin.algorithm']  = 'B-BB'
+    result = solver.solve(m, tee=False)
+    tc     = result.solver.termination_condition
+    if tc in (TerminationCondition.optimal, TerminationCondition.maxTimeLimit):
+        w     = {t: max(value(m.x[t]), 0.0) for t in tickers}
+        total = sum(w.values())
+        if total > 0:
+            w = {t: v / total for t, v in w.items()}
+        return w, sum(w[t] * float(mean_ret[t]) for t in tickers)
+    return None, None
+
+
+def find_optimal_portfolio(mean_ret, cov_matrix, sector_map, warm_start=None):
+    tickers     = mean_ret.index.tolist()
+    cov_array   = cov_matrix.values
+    n           = len(tickers)
+    w_eq        = np.ones(n) / n
+    eq_var      = float(w_eq @ cov_array @ w_eq)
+    d_max       = float(np.diag(cov_array).max())
+    risk_levels = np.linspace(eq_var * 0.5, d_max * 1.2, N_SWEEP)
+    frontier     = []
+    best_weights = None
+    best_ret     = None
+    best_sharpe  = -np.inf
+    best_risk    = None
+    for r_limit in risk_levels:
+        w, port_ret = solve_portfolio(
+            mean_ret, cov_matrix, sector_map,
+            risk_limit=r_limit, warm_start=warm_start
+        )
+        if w is None:
+            continue
+        w_vec    = np.array([w.get(t, 0.0) for t in tickers])
+        port_var = float(w_vec @ cov_array @ w_vec)
+        port_std = np.sqrt(max(port_var, 1e-12) * 252)
+        ann_ret  = port_ret * 252
+        sharpe   = ann_ret / port_std if port_std > 0 else -np.inf
+        frontier.append({'Port_Var': port_var, 'Port_Std': port_std,
+                         'Ann_Return': ann_ret, 'Sharpe': sharpe})
+        if sharpe > best_sharpe:
+            best_sharpe  = sharpe
+            best_weights = w
+            best_ret     = port_ret
+            best_risk    = port_var
+    return best_weights, best_ret, best_sharpe, best_risk, frontier
+
+
+# ══════════════════════════════════════════════════════════════
+#  TRADE LOG GENERATOR
+# ══════════════════════════════════════════════════════════════
+
+def generate_trade_log(today, weights, prev_weights, positions, prev_positions,
+                       exec_prices, close_prices, ticker_sector,
+                       nav_open, existing_df):
+    """
+    Compare today's target weights against yesterday's to classify
+    every position as BUY / SELL / ADD / REDUCE / HOLD.
+    Records full detail: shares, prices, dollar values, P&L, holding days.
+    """
+    today_str     = str(today)
+    trade_records = []
+    all_involved  = set(weights.keys()) | set(prev_weights.keys())
+
+    for ticker in all_involved:
+        new_w = weights.get(ticker, 0.0)
+        old_w = prev_weights.get(ticker, 0.0)
+
+        # Classify action
+        if old_w < 0.001 and new_w > 0.001:
+            action = 'BUY'
+        elif old_w > 0.001 and new_w < 0.001:
+            action = 'SELL'
+        elif new_w > old_w + 0.005:
+            action = 'ADD'
+        elif new_w < old_w - 0.005:
+            action = 'REDUCE'
+        else:
+            action = 'HOLD'
+
+        new_shares  = positions.get(ticker, 0.0)
+        old_shares  = prev_positions.get(ticker, 0.0)
+        exec_px     = float(exec_prices.get(ticker, 0))
+        close_px    = float(close_prices.get(ticker, 0))
+        new_value   = new_w * nav_open
+        old_value   = old_w * nav_open
+        delta_value = new_value - old_value
+        slippage    = abs(delta_value) * SLIPPAGE_PCT
+
+        # Look up entry price and holding days from existing log
+        entry_price  = exec_px
+        holding_days = 1
+        if not existing_df.empty and action in ('HOLD', 'ADD', 'REDUCE'):
+            prior = existing_df[
+                (existing_df['Ticker'] == ticker) &
+                (existing_df['Action'].isin(['BUY', 'ADD']))
+            ]
+            if not prior.empty:
+                last = prior.iloc[-1]
+                entry_price  = float(last.get('Exec_Price', exec_px))
+                try:
+                    entry_date   = pd.to_datetime(last['Date'])
+                    holding_days = max(1, (pd.Timestamp(today) - entry_date).days)
+                except Exception:
+                    pass
+
+        # P&L calculations
+        eod_value      = new_shares * close_px if close_px > 0 else new_value
+        position_pnl   = eod_value - new_value if action != 'SELL' else -old_value
+        unrealised_pnl = (close_px - entry_price) * new_shares \
+                         if new_shares > 0 and entry_price > 0 else 0.0
+
+        trade_records.append({
+            'Date':           today_str,
+            'Ticker':         ticker,
+            'Sector':         ticker_sector.get(ticker, 'Unknown'),
+            'Action':         action,
+            'Weight_Prev':    round(old_w * 100, 3),
+            'Weight_New':     round(new_w * 100, 3),
+            'Weight_Delta':   round((new_w - old_w) * 100, 3),
+            'Shares_Prev':    round(old_shares, 4),
+            'Shares_New':     round(new_shares, 4),
+            'Shares_Delta':   round(new_shares - old_shares, 4),
+            'Exec_Price':     round(exec_px, 4),
+            'Close_Price':    round(close_px, 4),
+            'Entry_Price':    round(entry_price, 4),
+            'Value_Prev':     round(old_value, 2),
+            'Value_New':      round(new_value, 2),
+            'Value_Delta':    round(delta_value, 2),
+            'Slippage':       round(slippage, 4),
+            'Holding_Days':   holding_days,
+            'Position_PnL':   round(position_pnl, 2),
+            'Unrealised_PnL': round(unrealised_pnl, 2),
+        })
+
+    if not trade_records:
+        return existing_df
+
+    today_df = pd.DataFrame(trade_records)
+
+    if existing_df.empty:
+        updated = today_df
+    else:
+        clean   = existing_df[existing_df['Date'].astype(str) != today_str]
+        updated = pd.concat([clean, today_df], ignore_index=True)
+
+    updated['Date'] = pd.to_datetime(updated['Date'])
+    updated = updated.sort_values(['Date', 'Ticker']).reset_index(drop=True)
+
+    buys  = today_df[today_df['Action'] == 'BUY']['Ticker'].tolist()
+    sells = today_df[today_df['Action'] == 'SELL']['Ticker'].tolist()
+    log(f"  Trades: {len(buys)} BUY {buys}, {len(sells)} SELL {sells}, "
+        f"{len(today_df)-len(buys)-len(sells)} HOLD/ADD/REDUCE")
+    return updated
+
+
+# ══════════════════════════════════════════════════════════════
+#  PORTFOLIO STATE
+# ══════════════════════════════════════════════════════════════
+
+def load_portfolio_state():
+    """Load persistent state from GitHub — positions, cash, NAV history."""
+    content, _ = fetch_from_github('data/portfolio_state.json')
+    if content:
+        try:
+            state = json.loads(content)
+            state.setdefault('cash', STARTING_CAPITAL)
+            state.setdefault('positions', {})
+            state.setdefault('weights', {})
+            state.setdefault('nav_history', [])
+            state.setdefault('last_run', None)
+            state.setdefault('current_holdings', [])
+            log(f"State loaded — {len(state['nav_history'])} days on record")
+            return state
+        except Exception as e:
+            log(f"State parse error: {e} — starting fresh")
+    log("No existing state — initialising fresh $1M portfolio")
+    return {
+        'cash': STARTING_CAPITAL, 'positions': {},
+        'weights': {}, 'nav_history': [],
+        'last_run': None, 'current_holdings': [],
+    }
+
+
+# ══════════════════════════════════════════════════════════════
+#  DASHBOARD BUILDER
+# ══════════════════════════════════════════════════════════════
+
+def build_dashboard(perf, spy_close, today_str, best_sharpe, current_holdings):
+    """Main dashboard with live holdings table and links to trades page."""
+    import json as _js
+
+    dates   = perf.index.strftime('%Y-%m-%d').tolist()
+    navs    = perf['NAV'].round(2).tolist()
+    pnls    = perf['Daily_PnL'].round(2).tolist()
+    returns = (perf['Daily_Return'] * 100).round(4).tolist()
+    sharpes = perf['Selected_Sharpe'].round(4).tolist() \
+              if 'Selected_Sharpe' in perf.columns else [0] * len(dates)
+
+    spy_rb = []
+    if spy_close is not None:
+        spy_q2 = spy_close.reindex(perf.index).ffill()
+        if len(spy_q2) > 0 and spy_q2.iloc[0] > 0:
+            spy_rb = (spy_q2 / spy_q2.iloc[0] * STARTING_CAPITAL).round(2).tolist()
+
+    total_ret = (navs[-1] / STARTING_CAPITAL - 1) * 100 if navs else 0
+    total_pnl = navs[-1] - STARTING_CAPITAL if navs else 0
+    n_days    = len(navs)
+    win_rate  = sum(1 for p in pnls if p > 0) / n_days * 100 if n_days else 0
+
+    pnl_cls = "pos" if total_pnl >= 0 else "neg"
+    ret_cls = "pos" if total_ret >= 0 else "neg"
+
+    js_labels   = _js.dumps(dates)
+    js_navs     = _js.dumps(navs)
+    js_spy      = _js.dumps(spy_rb)
+    js_pnls     = _js.dumps(pnls)
+    js_rets     = _js.dumps(returns)
+    js_sharps   = _js.dumps(sharpes)
+    js_holdings = _js.dumps(current_holdings)
+
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang='en'>\n"
+        "<head>\n"
+        "<meta charset='UTF-8'>\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1.0'>\n"
+        "<title>SP500 Portfolio Optimizer</title>\n"
+        "<script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js'></script>\n"
+        "<style>\n"
+        "*{box-sizing:border-box;margin:0;padding:0;}\n"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        "background:#0f1117;color:#e0e0e0;padding:20px;}\n"
+        "nav{display:flex;gap:12px;margin-bottom:20px;}\n"
+        "nav a{background:#1e2130;color:#64B5F6;padding:8px 18px;border-radius:8px;"
+        "text-decoration:none;font-size:0.82rem;border:1px solid #2196F322;}\n"
+        "nav a.active{background:#2196F3;color:#fff;border-color:#2196F3;}\n"
+        "h1{font-size:1.55rem;color:#64B5F6;margin-bottom:4px;}\n"
+        ".sub{color:#90A4AE;font-size:0.80rem;margin-bottom:22px;}\n"
+        ".kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));"
+        "gap:11px;margin-bottom:26px;}\n"
+        ".kpi{background:#1e2130;border-radius:10px;padding:15px;border-left:4px solid #2196F3;}\n"
+        ".kpi .lbl{font-size:0.68rem;color:#90A4AE;text-transform:uppercase;letter-spacing:.5px;}\n"
+        ".kpi .val{font-size:1.35rem;font-weight:700;margin-top:3px;}\n"
+        ".pos{color:#66BB6A;}.neg{color:#EF5350;}.neu{color:#64B5F6;}\n"
+        ".grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}\n"
+        ".full{grid-column:1/-1;}\n"
+        ".card{background:#1e2130;border-radius:12px;padding:16px;}\n"
+        ".card h3{font-size:0.78rem;color:#90A4AE;margin-bottom:11px;"
+        "text-transform:uppercase;letter-spacing:.5px;}\n"
+        ".cw{position:relative;height:225px;}.cw.t{height:285px;}\n"
+        "table{width:100%;border-collapse:collapse;font-size:0.82rem;}\n"
+        "thead th{padding:8px 12px;text-align:left;color:#90A4AE;"
+        "font-size:0.68rem;text-transform:uppercase;letter-spacing:.5px;"
+        "border-bottom:1px solid #2a2d3e;}\n"
+        "tbody td{padding:9px 12px;border-bottom:1px solid #1a1d2e;}\n"
+        "tbody tr:hover{background:#252840;}\n"
+        ".badge{display:inline-block;padding:2px 8px;border-radius:12px;"
+        "font-size:0.72rem;font-weight:600;}\n"
+        ".live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;"
+        "background:#66BB6A;margin-right:6px;animation:pulse 2s infinite;}\n"
+        "@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}\n"
+        "footer{text-align:center;color:#546E7A;font-size:0.70rem;margin-top:22px;}\n"
+        "a{color:#64B5F6;}\n"
+        "</style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<nav>\n"
+        "  <a href='index.html' class='active'>&#x1F4C8; Dashboard</a>\n"
+        "  <a href='trades.html'>&#x1F4CB; Trade History</a>\n"
+        "</nav>\n"
+        "<h1>&#x1F4C8; SP500 MINLP Portfolio Optimizer</h1>\n"
+        "<p class='sub'>Updated: <strong>" + today_str + "</strong> &nbsp;|&nbsp; "
+        "$1M capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp; "
+        "45-day window &nbsp;|&nbsp; Automated via GitHub Actions + Google Cloud Run</p>\n"
+        "<div class='kpis'>\n"
+        "  <div class='kpi'><div class='lbl'>Current NAV</div>"
+        "<div class='val neu'>$" + f"{navs[-1]:,.0f}" + "</div></div>\n"
+        "  <div class='kpi'><div class='lbl'>Total P&amp;L</div>"
+        "<div class='val " + pnl_cls + "'>$" + f"{total_pnl:+,.0f}" + "</div></div>\n"
+        "  <div class='kpi'><div class='lbl'>Total Return</div>"
+        "<div class='val " + ret_cls + "'>" + f"{total_ret:+.2f}" + "%</div></div>\n"
+        "  <div class='kpi'><div class='lbl'>Win Rate</div>"
+        "<div class='val neu'>" + f"{win_rate:.1f}" + "%</div></div>\n"
+        "  <div class='kpi'><div class='lbl'>Trading Days</div>"
+        "<div class='val neu'>" + str(n_days) + "</div></div>\n"
+        "  <div class='kpi'><div class='lbl'>Today Sharpe</div>"
+        "<div class='val neu'>" + f"{best_sharpe:.3f}" + "</div></div>\n"
+        "</div>\n"
+        "\n"
+        "<!-- Current Holdings -->\n"
+        "<div class='card full' style='margin-bottom:18px;'>\n"
+        "  <h3><span class='live-dot'></span>Current Holdings &mdash; Live Prices"
+        "  <span style='color:#546E7A;font-weight:400;font-size:0.70rem;'>"
+        "  &nbsp;Auto-refreshes every 60s during market hours</span></h3>\n"
+        "  <table>\n"
+        "    <thead><tr>"
+        "<th>Ticker</th><th>Sector</th><th>Weight</th>"
+        "<th>Shares</th><th>Entry Price</th><th>Live Price</th>"
+        "<th>Value</th><th>Day P&amp;L</th><th>Return vs Entry</th>"
+        "</tr></thead>\n"
+        "    <tbody id='holdingsBody'>"
+        "<tr><td colspan='9' style='text-align:center;color:#90A4AE;padding:20px;'>"
+        "Fetching live prices...</td></tr>"
+        "</tbody>\n"
+        "  </table>\n"
+        "</div>\n"
+        "\n"
+        "<!-- Charts -->\n"
+        "<div class='grid'>\n"
+        "  <div class='card full'><h3>NAV vs SPY Buy &amp; Hold</h3>"
+        "<div class='cw t'><canvas id='navChart'></canvas></div></div>\n"
+        "  <div class='card'><h3>Daily P&amp;L ($)</h3>"
+        "<div class='cw'><canvas id='pnlChart'></canvas></div></div>\n"
+        "  <div class='card'><h3>Daily Return (%)</h3>"
+        "<div class='cw'><canvas id='retChart'></canvas></div></div>\n"
+        "  <div class='card'><h3>Daily Frontier Sharpe</h3>"
+        "<div class='cw'><canvas id='sharpeChart'></canvas></div></div>\n"
+        "</div>\n"
+        "\n"
+        "<footer>\n"
+        "  SP500 MINLP Portfolio Optimizer &mdash; OPIM 5641 &middot; UConn &mdash;\n"
+        "  GitHub Actions 3:55 PM ET &mdash; Google Cloud Run &mdash;\n"
+        "  <a href='https://github.com/bromomo-git/SP500-Portfolio-Optimizer'>GitHub</a>\n"
+        "  &nbsp;|&nbsp; <a href='trades.html'>Full Trade History &rarr;</a>\n"
+        "</footer>\n"
+        "\n"
+        "<script>\n"
+        "const G={color:'rgba(255,255,255,0.06)'};\n"
+        "const F={color:'#90A4AE',size:10};\n"
+        "Chart.defaults.color='#90A4AE';\n"
+        "const js_labels=" + js_labels + ";\n"
+        "const js_navs=" + js_navs + ";\n"
+        "const js_spy=" + js_spy + ";\n"
+        "const js_pnls=" + js_pnls + ";\n"
+        "const js_rets=" + js_rets + ";\n"
+        "const js_sharps=" + js_sharps + ";\n"
+        "const js_holdings=" + js_holdings + ";\n"
+        "\n"
+        "const SECTOR_COLOURS={"
+        "'Technology':'#2196F3','Healthcare':'#F44336',"
+        "'Utilities':'#9C27B0','Energy':'#FF9800','Industrials':'#4CAF50'};\n"
+        "\n"
+        "function mkChart(id,type,data,opts){\n"
+        "  const ctx=document.getElementById(id);\n"
+        "  if(!ctx)return;\n"
+        "  return new Chart(ctx,{type,data,options:{\n"
+        "    responsive:true,maintainAspectRatio:false,\n"
+        "    plugins:{legend:{labels:{color:'#e0e0e0'}}},...opts}});\n"
+        "}\n"
+        "function scXY(yCb){return{scales:{x:{ticks:F,grid:G},y:{ticks:{...F,callback:yCb},grid:G}}};}\n"
+        "\n"
+        "mkChart('navChart','line',{labels:js_labels,datasets:[\n"
+        "  {label:'MINLP Portfolio',data:js_navs,borderColor:'#2196F3',"
+        "backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2.2,pointRadius:2,fill:true,tension:0.3},\n"
+        "  {label:'SPY Buy & Hold',data:js_spy,borderColor:'#90A4AE',"
+        "borderDash:[3,3],borderWidth:1.5,pointRadius:0,fill:false},\n"
+        "]},{...scXY(v=>'$'+v.toLocaleString())});\n"
+        "\n"
+        "mkChart('pnlChart','bar',{labels:js_labels,datasets:[{label:'P&L',data:js_pnls,\n"
+        "  backgroundColor:js_pnls.map(v=>v>=0?'rgba(102,187,106,0.8)':'rgba(239,83,80,0.8)'),"
+        "borderRadius:3}]},{plugins:{legend:{display:false}},...scXY(v=>'$'+v.toLocaleString())});\n"
+        "\n"
+        "mkChart('retChart','bar',{labels:js_labels,datasets:[{label:'Return %',data:js_rets,\n"
+        "  backgroundColor:js_rets.map(v=>v>=0?'rgba(102,187,106,0.8)':'rgba(239,83,80,0.8)'),"
+        "borderRadius:3}]},{plugins:{legend:{display:false}},...scXY(v=>v.toFixed(2)+'%')});\n"
+        "\n"
+        "mkChart('sharpeChart','line',{labels:js_labels,datasets:[{label:'Sharpe',data:js_sharps,\n"
+        "  borderColor:'#64B5F6',backgroundColor:'rgba(100,181,246,0.1)',"
+        "borderWidth:2,pointRadius:2,fill:true,tension:0.3}]},\n"
+        "{plugins:{legend:{display:false}},...scXY(v=>v.toFixed(2))});\n"
+        "\n"
+        "// Live price fetch via Yahoo Finance v8 API (works client-side)\n"
+        "async function fetchLivePrice(ticker){\n"
+        "  try{\n"
+        "    const t1=Math.floor((Date.now()/1000)-86400*5);\n"
+        "    const t2=Math.floor(Date.now()/1000)+3600;\n"
+        "    const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}"
+        "?interval=1d&period1=${t1}&period2=${t2}`;\n"
+        "    const r=await fetch(url);\n"
+        "    const d=await r.json();\n"
+        "    const closes=d.chart.result[0].indicators.quote[0].close.filter(v=>v!==null);\n"
+        "    return closes[closes.length-1]||null;\n"
+        "  }catch(e){return null;}\n"
+        "}\n"
+        "\n"
+        "async function updateHoldings(){\n"
+        "  if(!js_holdings||!js_holdings.length){\n"
+        "    document.getElementById('holdingsBody').innerHTML="
+        "'<tr><td colspan=\"9\" style=\"text-align:center;color:#90A4AE;padding:20px;\">"
+        "No holdings data available</td></tr>';\n"
+        "    return;\n"
+        "  }\n"
+        "  const rows=await Promise.all(js_holdings.map(async h=>{\n"
+        "    const live=await fetchLivePrice(h.ticker);\n"
+        "    const entry=h.entry_price||0;\n"
+        "    const val=live?live*h.shares:(h.value||0);\n"
+        "    const dayPnl=live&&h.prev_close?(live-h.prev_close)*h.shares:null;\n"
+        "    const ret=entry>0&&live?((live-entry)/entry*100):null;\n"
+        "    const sc=SECTOR_COLOURS[h.sector]||'#90A4AE';\n"
+        "    const pStr=dayPnl!==null?"
+        "`<span class='${dayPnl>=0?\"pos\":\"neg\"}'>"
+        "$${dayPnl>=0?\"+\":\"\"}${dayPnl.toFixed(0)}</span>`:'-';\n"
+        "    const rStr=ret!==null?"
+        "`<span class='${ret>=0?\"pos\":\"neg\"}'>"
+        "${ret>=0?\"+\":\"\"}${ret.toFixed(2)}%</span>`:'-';\n"
+        "    return `<tr>\n"
+        "      <td><strong>${h.ticker}</strong></td>\n"
+        "      <td><span class='badge' style='background:${sc}22;color:${sc}'>${h.sector}</span></td>\n"
+        "      <td>${h.weight.toFixed(1)}%</td>\n"
+        "      <td>${h.shares.toFixed(2)}</td>\n"
+        "      <td>${entry>0?'$'+entry.toFixed(2):'-'}</td>\n"
+        "      <td>${live?'$'+live.toFixed(2):'<span style=\"color:#546E7A\">—</span>'}</td>\n"
+        "      <td>${val>0?'$'+val.toLocaleString('en-US',{maximumFractionDigits:0}):'-'}</td>\n"
+        "      <td>${pStr}</td>\n"
+        "      <td>${rStr}</td>\n"
+        "    </tr>`;\n"
+        "  }));\n"
+        "  document.getElementById('holdingsBody').innerHTML=rows.join('');\n"
+        "}\n"
+        "\n"
+        "updateHoldings();\n"
+        "setInterval(()=>{\n"
+        "  const now=new Date();\n"
+        "  const et=new Date(now.toLocaleString('en-US',{timeZone:'America/New_York'}));\n"
+        "  const h=et.getHours(),m=et.getMinutes(),dow=et.getDay();\n"
+        "  if(dow>=1&&dow<=5&&(h>9||(h===9&&m>=30))&&h<16)updateHoldings();\n"
+        "},60000);\n"
+        "</script>\n"
+        "</body>\n"
+        "</html>"
+    )
+
+
+# ══════════════════════════════════════════════════════════════
+#  MAIN PIPELINE
+# ══════════════════════════════════════════════════════════════
+
+def run_daily():
+    today = date.today()
+    log("=" * 56)
+    log(f"SP500 Portfolio Runner — {today}")
+    log("=" * 56)
+
+    # Load persistent state
+    state = load_portfolio_state()
+
+    if state.get('last_run') == str(today):
+        log("Already ran today — exiting cleanly")
+        return {'status': 'already_ran'}
+
+    # Universe
+    all_tickers, ticker_sector = build_universe()
+    state['ticker_sector'] = ticker_sector
+
+    # Download
+    (close_px, open_px, volume_px, daily_ret,
+     spy_close, vix_close, all_tickers,
+     ticker_sector) = download_data(all_tickers, ticker_sector)
+
+    # Locate today in price series
+    all_days = daily_ret.index
+    today_ts = pd.Timestamp(today)
+    day_idx  = all_days.get_loc(today_ts) if today_ts in all_days \
+               else len(all_days) - 1
+
+    if day_idx < LOOKBACK:
+        log(f"Insufficient history ({day_idx} < {LOOKBACK})")
+        return {'nav': None, 'pnl': 0, 'sharpe': 0, 'stocks_held': 0}
+
+    # Filter
+    log(f"Running filter (top {TOP_N})...")
+    top_tickers, top_sec_map = daily_filter(
+        daily_ret, volume_px, ticker_sector, day_idx
+    )
+    if len(top_tickers) < N_STOCKS:
+        log("Filter returned insufficient stocks")
+        return {'nav': None, 'pnl': 0, 'sharpe': 0, 'stocks_held': 0}
+
+    # Estimate parameters
+    log("Estimating parameters (Ledoit-Wolf)...")
+    mean_r, cov_m = estimate_params(daily_ret, top_tickers, day_idx)
+
+    # Frontier sweep
+    log(f"Running frontier sweep ({N_SWEEP} solves)...")
+    weights, est_ret, best_sharpe, best_risk, frontier = find_optimal_portfolio(
+        mean_r, cov_m, top_sec_map
+    )
+
+    if weights is None:
+        log("All frontier solves infeasible")
+        return {'nav': STARTING_CAPITAL, 'pnl': 0, 'sharpe': 0, 'stocks_held': 0}
+
+    held = [t for t, w in weights.items() if w > 1e-4]
+    log(f"Selected {len(held)} stocks | Sharpe {best_sharpe:.3f}")
+
+    # Execution prices
+    exec_day = all_days[day_idx + 1] if day_idx + 1 < len(all_days) \
+               else all_days[day_idx]
+    op = open_px.loc[exec_day]
+    cp = close_px.loc[exec_day]
+
+    # Restore state
+    prev_positions = {t: float(s) for t, s in state.get('positions', {}).items()}
+    prev_weights   = {t: float(w) for t, w in state.get('weights', {}).items()}
+
+    # NAV at open
+    equity_open = sum(
+        prev_positions.get(t, 0.0) * float(op.get(t, 0))
+        for t in prev_positions
+    )
+    cash_open = float(state.get('cash', STARTING_CAPITAL))
+    nav_open  = max(cash_open + equity_open, STARTING_CAPITAL * 0.1)
+    if len(state.get('nav_history', [])) == 0:
+        nav_open  = STARTING_CAPITAL
+        cash_open = STARTING_CAPITAL
+    log(f"NAV at open: ${nav_open:,.2f}")
+
+    # Execute trades
+    target_dollars  = {t: weights.get(t, 0.0) * nav_open for t in top_tickers}
+    current_dollars = {
+        t: prev_positions.get(t, 0.0) * float(op.get(t, 0))
+        for t in all_tickers
+    }
+    new_positions = dict(prev_positions)
+    cash = cash_open
+    day_slip = 0.0
+    day_turn = 0.0
+
+    all_trade_t = set(target_dollars.keys()) | {
+        t for t in prev_positions if prev_positions[t] > 1e-6
+    }
+    for t in all_trade_t:
+        delta = target_dollars.get(t, 0.0) - current_dollars.get(t, 0.0)
+        if abs(delta) < 1.0:
+            continue
+        t_px = float(op.get(t, 0))
+        if t_px <= 0:
+            continue
+        direction    = 1 if delta > 0 else -1
+        slip_cost    = abs(delta) * SLIPPAGE_PCT
+        effective_px = t_px * (1 + direction * SLIPPAGE_PCT)
+        new_positions[t] = new_positions.get(t, 0.0) + delta / effective_px
+        cash    -= (delta + direction * slip_cost)
+        day_slip += slip_cost
+        day_turn += abs(delta)
+
+    new_positions = {t: s for t, s in new_positions.items() if abs(s) > 1e-6}
+
+    # EOD NAV
+    eod_equity  = sum(new_positions.get(t, 0.0) * float(cp.get(t, 0))
+                      for t in new_positions)
+    eod_nav     = cash + eod_equity
+    daily_pnl   = eod_nav - nav_open
+    daily_ret_v = daily_pnl / nav_open if nav_open > 0 else 0
+    log(f"EOD NAV: ${eod_nav:,.2f} | P&L: ${daily_pnl:+,.2f} ({daily_ret_v:+.3%})")
+
+    commit_msg = f"Auto: Cloud Run portfolio {today}"
+
+    # Load existing CSVs
+    log("Loading existing data files...")
+    perf_content, _  = fetch_from_github('results/performance_log.csv')
+    trade_content, _ = fetch_from_github('results/trade_log.csv')
+
+    perf_df = pd.read_csv(io.StringIO(perf_content)) \
+              if perf_content else pd.DataFrame(columns=[
+                  'Date','NAV','Daily_PnL','Daily_Return',
+                  'Slippage','Turnover','Selected_Sharpe','Held_Tickers'
+              ])
+    trade_df = pd.read_csv(io.StringIO(trade_content)) \
+               if trade_content else pd.DataFrame()
+
+    # Generate trade log
+    log("Generating trade log...")
+    exec_prices  = {t: float(op.get(t, 0)) for t in all_tickers}
+    close_prices = {t: float(cp.get(t, 0)) for t in all_tickers}
+    trade_df = generate_trade_log(
+        today, weights, prev_weights,
+        new_positions, prev_positions,
+        exec_prices, close_prices,
+        ticker_sector, nav_open, trade_df
+    )
+
+    # Append performance row
+    new_row = {
+        'Date':            str(today),
+        'NAV':             round(eod_nav, 2),
+        'Daily_PnL':       round(daily_pnl, 2),
+        'Daily_Return':    round(daily_ret_v, 6),
+        'Slippage':        round(day_slip, 4),
+        'Turnover':        round(day_turn, 2),
+        'Selected_Sharpe': round(best_sharpe, 4),
+        'Held_Tickers':    ','.join(held),
+    }
+    perf_df = pd.concat([perf_df, pd.DataFrame([new_row])], ignore_index=True)
+    perf_df['Date'] = pd.to_datetime(perf_df['Date'])
+    perf_df = perf_df.drop_duplicates(subset='Date', keep='last')
+    perf_df = perf_df.sort_values('Date').reset_index(drop=True)
+
+    # Build current holdings snapshot for dashboard
+    current_holdings = []
+    for t in held:
+        entry_px = float(op.get(t, 0))
+        if not trade_df.empty:
+            prior = trade_df[
+                (trade_df['Ticker'] == t) &
+                (trade_df['Action'].isin(['BUY', 'ADD']))
+            ]
+            if not prior.empty:
+                entry_px = float(prior.iloc[-1].get('Exec_Price', entry_px))
+        current_holdings.append({
+            'ticker':      t,
+            'sector':      ticker_sector.get(t, 'Unknown'),
+            'weight':      round(weights.get(t, 0) * 100, 2),
+            'shares':      round(new_positions.get(t, 0.0), 4),
+            'entry_price': round(entry_px, 4),
+            'prev_close':  round(float(cp.get(t, 0)), 4),
+            'value':       round(new_positions.get(t, 0.0) * float(cp.get(t, 0)), 2),
+        })
+
+    # Push all 4 files
+    log("Pushing 4 files to GitHub...")
+
+    push_to_github(
+        'results/performance_log.csv',
+        perf_df.to_csv(index=False),
+        commit_msg
+    )
+    push_to_github(
+        'results/trade_log.csv',
+        trade_df.to_csv(index=False),
+        commit_msg
+    )
+
+    # Update state
+    state['cash']             = round(cash, 4)
+    state['positions']        = {t: round(float(s), 6) for t, s in new_positions.items()}
+    state['weights']          = {t: round(float(w), 6) for t, w in weights.items() if w > 1e-4}
+    state['last_run']         = str(today)
+    state['current_holdings'] = current_holdings
+    state['nav_history'].append({
+        'date': str(today), 'nav': round(eod_nav, 2), 'pnl': round(daily_pnl, 2)
+    })
+    push_to_github(
+        'data/portfolio_state.json',
+        json.dumps(state, indent=2, default=str),
+        commit_msg
+    )
+
+    # Build and push dashboard
+    perf_indexed = perf_df.set_index('Date')
+    push_to_github(
+        'docs/index.html',
+        build_dashboard(perf_indexed, spy_close, str(today),
+                        best_sharpe, current_holdings),
+        commit_msg
+    )
+
+    log("=" * 56)
+    log(f"Complete — NAV ${eod_nav:,.2f} | 4 files pushed to GitHub")
+    log(f"Dashboard: https://bromomo-git.github.io/SP500-Portfolio-Optimizer/")
+    log("=" * 56)
+
+    return {
+        'nav':         round(eod_nav, 2),
+        'pnl':         round(daily_pnl, 2),
+        'sharpe':      round(best_sharpe, 3),
+        'stocks_held': len(held),
+    }
