@@ -8,3 +8,4 @@ matplotlib==3.8.4
 requests==2.31.0
 fear-and-greed==0.4
 lxml==5.2.2
+pysqlite3-binary
