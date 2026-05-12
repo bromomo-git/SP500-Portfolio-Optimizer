@@ -1,11 +1,271 @@
-<nav style="display:flex;gap:12px;margin-bottom:20px;">
-  <a href="index.html" style="background:#2196F3;color:#fff;padding:8px 18px;
-     border-radius:8px;text-decoration:none;font-size:0.82rem;">
-    &#x1F4C8; Dashboard
-  </a>
-  <a href="trades.html" style="background:#1e2130;color:#64B5F6;padding:8px 18px;
-     border-radius:8px;text-decoration:none;font-size:0.82rem;
-     border:1px solid #2196F322;">
-    &#x1F4CB; Trade History
-  </a>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SP500 MINLP Portfolio Optimizer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e0e0e0;padding:20px;}
+nav{display:flex;gap:12px;margin-bottom:20px;}
+nav a{background:#1e2130;color:#64B5F6;padding:8px 18px;border-radius:8px;text-decoration:none;font-size:0.82rem;border:1px solid #2196F322;}
+nav a.active{background:#2196F3;color:#fff;border-color:#2196F3;}
+h1{font-size:1.55rem;color:#64B5F6;margin-bottom:4px;}
+.sub{color:#90A4AE;font-size:0.80rem;margin-bottom:22px;}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:11px;margin-bottom:26px;}
+.kpi{background:#1e2130;border-radius:10px;padding:15px;border-left:4px solid #2196F3;}
+.kpi .lbl{font-size:0.67rem;color:#90A4AE;text-transform:uppercase;letter-spacing:.5px;}
+.kpi .val{font-size:1.3rem;font-weight:700;margin-top:3px;}
+.pos{color:#66BB6A;}.neg{color:#EF5350;}.neu{color:#64B5F6;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+.full{grid-column:1/-1;}
+.card{background:#1e2130;border-radius:12px;padding:16px;}
+.card h3{font-size:0.75rem;color:#90A4AE;margin-bottom:11px;text-transform:uppercase;letter-spacing:.5px;}
+.cw{position:relative;height:220px;}.cw.t{height:290px;}.cw.m{height:250px;}
+.sec-label{font-size:0.70rem;color:#90A4AE;text-transform:uppercase;letter-spacing:1px;
+  margin:22px 0 10px 2px;border-left:3px solid #2196F3;padding-left:8px;}
+table{width:100%;border-collapse:collapse;font-size:0.82rem;}
+thead th{padding:8px 12px;text-align:left;color:#90A4AE;font-size:0.67rem;
+  text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #2a2d3e;}
+tbody td{padding:9px 12px;border-bottom:1px solid #1a1d2e;}
+tbody tr:hover{background:#252840;}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.72rem;font-weight:600;}
+.live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+  background:#66BB6A;margin-right:6px;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+footer{text-align:center;color:#546E7A;font-size:0.70rem;margin-top:24px;}
+a{color:#64B5F6;}
+</style>
+</head>
+<body>
+<nav>
+  <a href="index.html" class="active">&#x1F4C8; Dashboard</a>
+  <a href="trades.html">&#x1F4CB; Trade History</a>
 </nav>
+<h1>&#x1F4C8; SP500 MINLP Portfolio Optimizer</h1>
+<p class="sub">Updated: <strong>2026-05-12</strong> &nbsp;|&nbsp; $1,000,000 starting capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp; 5 sectors &nbsp;|&nbsp; 45-day rolling window &nbsp;|&nbsp; Risk multiplier: <strong>1.25&times;</strong></p>
+<div class="kpis"><div class="kpi"><div class="lbl">Current NAV</div><div class="val neu">$1,332,179</div></div>
+<div class="kpi"><div class="lbl">Total P&amp;L</div><div class="val pos">$+332,179</div></div>
+<div class="kpi"><div class="lbl">Total Return</div><div class="val pos">+33.22%</div></div>
+<div class="kpi"><div class="lbl">vs SPY Alpha</div><div class="val pos">+20.49%</div></div>
+<div class="kpi"><div class="lbl">Win Rate</div><div class="val neu">55.6%</div></div>
+<div class="kpi"><div class="lbl">Avg Sharpe</div><div class="val neu">7.357</div></div>
+<div class="kpi"><div class="lbl">Trading Days</div><div class="val neu">27</div></div>
+<div class="kpi"><div class="lbl">Fear &amp; Greed</div><div class="val" style="color:#90A4AE">greed (66)</div></div>
+</div>
+
+<div class="sec-label">&#x1F3E6; Current Holdings &mdash; Live Prices</div>
+<div class="card full" style="margin-bottom:18px;">
+  <h3><span class="live-dot"></span>Today's Portfolio
+    <span style="color:#546E7A;font-weight:400;font-size:0.70rem;">
+    &nbsp;Refreshes every 60s during market hours</span>
+  </h3>
+  <table>
+    <thead><tr>
+      <th>Ticker</th><th>Sector</th><th>Weight</th>
+      <th>Live Price</th><th>Value</th><th>Day P&amp;L</th>
+    </tr></thead>
+    <tbody id="holdingsBody">
+      <tr><td colspan="6" style="text-align:center;color:#90A4AE;padding:20px;">
+        Fetching live prices...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="sec-label">&#x1F4C9; Performance vs Benchmarks &mdash; Comparative Analysis</div>
+<div class="grid">
+  <div class="card full">
+    <h3>NAV &mdash; MINLP Portfolio vs SPY Buy &amp; Hold vs Golden Cross (50/200-day MA)</h3>
+    <div class="cw t"><canvas id="navChart"></canvas></div>
+  </div>
+  <div class="card"><h3>Daily P&amp;L ($)</h3>
+    <div class="cw"><canvas id="pnlChart"></canvas></div></div>
+  <div class="card"><h3>Cumulative Return (%) vs SPY</h3>
+    <div class="cw"><canvas id="cumRetChart"></canvas></div></div>
+  <div class="card"><h3>Drawdown from Peak (%)</h3>
+    <div class="cw"><canvas id="drawdownChart"></canvas></div></div>
+  <div class="card"><h3>Daily Return (%)</h3>
+    <div class="cw"><canvas id="retChart"></canvas></div></div>
+</div>
+
+<div class="sec-label">&#x1F9E0; MINLP Optimizer &mdash; Frontier Selection + Linking Constraints</div>
+<div class="grid">
+  <div class="card"><h3>Daily Frontier Sharpe &mdash; Auto-selected max-Sharpe each day</h3>
+    <div class="cw"><canvas id="sharpeChart"></canvas></div></div>
+  <div class="card"><h3>Portfolio Risk (variance &times;10k)</h3>
+    <div class="cw"><canvas id="riskChart"></canvas></div></div>
+  <div class="card"><h3>Stocks Held Per Day &mdash; Always exactly 10</h3>
+    <div class="cw"><canvas id="heldChart"></canvas></div></div>
+  <div class="card"><h3>Daily Slippage ($)</h3>
+    <div class="cw"><canvas id="slipChart"></canvas></div></div>
+</div>
+
+<div class="sec-label">&#x1F3DB; Sector Allocation &mdash; 2 Stocks Per Sector Constraint</div>
+<div class="grid">
+  <div class="card full">
+    <h3>Sector Weight Over Time &mdash; MINLP enforces exactly 2 per sector daily</h3>
+    <div class="cw t"><canvas id="sectorStackChart"></canvas></div>
+  </div>
+  <div class="card"><h3>Average Sector Allocation &mdash; Q2 2026</h3>
+    <div class="cw m"><canvas id="sectorDoughnut"></canvas></div></div>
+  <div class="card"><h3>Top 15 Most Selected Stocks (colour = sector)</h3>
+    <div class="cw m"><canvas id="freqChart"></canvas></div></div>
+</div>
+
+<div class="sec-label">&#x1F4F0; External Factor &mdash; Fear &amp; Greed Index Integration</div>
+<div class="grid">
+  <div class="card full">
+    <h3>Estimated Return vs Actual Daily Return &mdash; Optimizer signal accuracy</h3>
+    <div class="cw m"><canvas id="estVsActChart"></canvas></div>
+  </div>
+</div>
+
+<footer>
+  SP500 MINLP Portfolio Optimizer &mdash; OPIM 5641 &middot; UConn &mdash;
+  <a href="https://github.com/bromomo-git/SP500-Portfolio-Optimizer">GitHub</a>
+  &nbsp;|&nbsp; <a href="trades.html">Trade History &rarr;</a>
+</footer>
+
+<script>
+const G={color:'rgba(255,255,255,0.06)'};
+const F={color:'#90A4AE',size:10};
+Chart.defaults.color='#90A4AE';
+const SC={'Technology':'#2196F3','Healthcare':'#F44336','Utilities':'#9C27B0','Energy':'#FF9800','Industrials':'#4CAF50'};
+const labels=["2026-04-02", "2026-04-06", "2026-04-07", "2026-04-08", "2026-04-09", "2026-04-10", "2026-04-13", "2026-04-14", "2026-04-15", "2026-04-16", "2026-04-17", "2026-04-20", "2026-04-21", "2026-04-22", "2026-04-23", "2026-04-24", "2026-04-27", "2026-04-28", "2026-04-29", "2026-04-30", "2026-05-01", "2026-05-04", "2026-05-05", "2026-05-06", "2026-05-07", "2026-05-08", "2026-05-11"];
+const navs=[1046967.3, 1032464.01, 1051071.13, 1064150.3, 1069266.66, 1068695.66, 1061561.67, 1039955.55, 1042298.05, 1065207.68, 1070991.72, 1067981.07, 1088700.22, 1094229.04, 1100044.29, 1108829.81, 1112030.63, 1094952.96, 1145314.99, 1153103.16, 1174649.9, 1165921.1, 1230918.48, 1241060.67, 1207863.07, 1281046.76, 1332178.7];
+const spyBH=[1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14, 1103593.92, 1118933.26, 1115502.49, 1124712.16, 1127273.79];
+const gcNavs=[1000000.0, 1004726.8, 1005168.95, 1030770.16, 1036716.76, 1036030.69, 1046155.19, 1058902.47, 1067258.26, 1069880.85, 1082811.09, 1080645.83, 1073570.89, 1084442.62, 1080234.2, 1088605.25, 1090480.71, 1085174.49, 1085006.78, 1095802.2, 1098836.6, 1094811.14, 1103593.92, 1118933.26, 1115502.49, 1124712.16, 1127273.79];
+const pnls=[46967.3, -15266.62, 13841.85, 26304.75, -5642.64, -4314.05, -10700.56, -28807.73, -57.51, 20339.76, 14119.94, -8692.37, 7768.58, -8558.34, 2171.73, 3238.93, -6767.26, 3113.56, 38453.54, -417.23, 27409.38, -8792.46, 36536.05, 452.1, -11406.97, 57143.07, 17449.98];
+const rets=[4.6967, -1.4571, 1.3345, 2.5346, -0.5249, -0.4021, -0.9979, -2.6954, -0.0055, 1.9466, 1.336, -0.8073, 0.7187, -0.7761, 0.1978, 0.293, -0.6049, 0.2852, 3.4741, -0.0362, 2.3892, -0.7485, 3.059, 0.0364, -0.9356, 4.6689, 1.3273];
+const sharps=[8.1529, 7.811, 8.2067, 7.7996, 7.8601, 7.6951, 7.2622, 7.1613, 7.2032, 6.3141, 5.8621, 6.1956, 5.8819, 6.7153, 6.533, 6.9288, 6.8499, 7.2207, 7.3255, 7.2359, 7.5725, 7.5217, 7.9272, 7.5952, 8.5061, 9.0664, 8.2259];
+const risks=[5.4785, 5.4813, 5.2191, 5.4728, 5.6462, 5.8053, 5.8431, 5.9503, 5.949, 5.6608, 5.6127, 5.7158, 5.7297, 5.7787, 5.9071, 5.7781, 5.7295, 5.6544, 5.625, 5.7236, 5.7784, 5.8567, 5.9242, 5.9464, 5.7137, 6.816, 6.7384];
+const held=[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
+const slip=[100.0, 6.2, 12.21, 29.3, 12.58, 33.17, 18.6, 76.11, 40.55, 37.99, 44.69, 50.12, 86.25, 72.94, 30.56, 50.41, 50.14, 98.9, 19.75, 26.36, 27.32, 42.9, 28.78, 90.21, 74.14, 57.22, 38.95];
+const estRet=[1.2021, 1.152, 1.1811, 1.1494, 1.1765, 1.168, 1.1058, 1.1004, 1.1067, 0.9463, 0.8749, 0.9331, 0.8869, 1.0169, 1.0002, 1.0492, 1.0329, 1.0816, 1.0945, 1.0905, 1.1467, 1.1467, 1.2154, 1.1667, 1.2808, 1.4911, 1.3451];
+const cumRet=[4.6967, 3.2464, 5.1071, 6.415, 6.9267, 6.8696, 6.1562, 3.9956, 4.2298, 6.5208, 7.0992, 6.7981, 8.87, 9.4229, 10.0044, 10.883, 11.2031, 9.4953, 14.5315, 15.3103, 17.465, 16.5921, 23.0918, 24.1061, 20.7863, 28.1047, 33.2179];
+const spyCumRet=[0.0, 0.4727, 0.5169, 3.077, 3.6717, 3.6031, 4.6155, 5.8902, 6.7258, 6.9881, 8.2811, 8.0646, 7.3571, 8.4443, 8.0234, 8.8605, 9.0481, 8.5174, 8.5007, 9.5802, 9.8837, 9.4811, 10.3594, 11.8933, 11.5502, 12.4712, 12.7274];
+const drawdown=[0.0, -1.3853, 0.0, 0.0, 0.0, -0.0534, -0.7206, -2.7412, -2.5222, -0.3796, 0.0, -0.2811, 0.0, 0.0, 0.0, 0.0, 0.0, -1.5357, 0.0, 0.0, 0.0, -0.7431, 0.0, 0.0, -2.6749, 0.0, 0.0];
+const secTech=[34.864, 35.815, 34.908, 35.822, 35.362, 39.062, 37.804, 44.383, 46.004, 42.304, 44.485, 47.286, 54.023, 58.665, 58.64, 58.794, 58.74, 60.0, 60.0, 59.688, 56.639, 55.199, 56.468, 50.071, 55.554, 60.0, 60.0];
+const secHcare=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+const secUtil=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+const secEnerg=[35.136, 34.185, 35.092, 34.178, 34.638, 30.938, 32.196, 25.617, 23.995, 17.685, 23.765, 22.714, 15.977, 11.335, 11.36, 11.206, 11.26, 10.0, 10.0, 10.311, 13.361, 14.8, 13.532, 19.929, 14.445, 10.0, 10.0];
+const secIndus=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.002, 20.011, 11.75, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+const freqLabels=["APA", "ETR", "VRT", "OXY", "CIEN", "GEV", "UNH", "DELL", "MRNA", "INTC", "DVA", "FIX", "HUM", "LITE", "PNW"];
+const freqCounts=[27, 26, 20, 17, 16, 14, 14, 13, 12, 10, 9, 9, 9, 8, 8];
+const freqColours=["#FF9800", "#9C27B0", "#4CAF50", "#FF9800", "#2196F3", "#4CAF50", "#F44336", "#2196F3", "#F44336", "#2196F3", "#F44336", "#4CAF50", "#F44336", "#2196F3", "#9C27B0"];
+const avgSecW=[49.65, 10.0, 10.0, 19.91, 10.44];
+const holdings=[{"ticker": "APA", "sector": "Energy", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.96}, {"ticker": "ETR", "sector": "Utilities", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.94}, {"ticker": "DVA", "sector": "Healthcare", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.96}, {"ticker": "FIX", "sector": "Industrials", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.95}, {"ticker": "HUM", "sector": "Healthcare", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.97}, {"ticker": "INTC", "sector": "Technology", "weight": 36.58, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 487285.23}, {"ticker": "PWR", "sector": "Industrials", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.95}, {"ticker": "FANG", "sector": "Energy", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.95}, {"ticker": "NEE", "sector": "Utilities", "weight": 5.0, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 66608.94}, {"ticker": "STX", "sector": "Technology", "weight": 23.42, "shares": 0, "entry_price": 0, "prev_close": 0, "value": 312021.66}];
+
+function mk(id,type,data,opts){
+  const ctx=document.getElementById(id);if(!ctx)return;
+  return new Chart(ctx,{type,data,options:{responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{labels:{color:'#e0e0e0',boxWidth:12}}},...opts}});
+}
+function xy(cb){return{scales:{x:{ticks:F,grid:G},y:{ticks:{...F,callback:cb},grid:G}}};}
+
+mk('navChart','line',{labels,datasets:[
+  {label:'MINLP Portfolio',data:navs,borderColor:'#2196F3',backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2.5,pointRadius:2,fill:true,tension:0.3},
+  {label:'SPY Buy & Hold',data:spyBH,borderColor:'#90A4AE',borderDash:[4,3],borderWidth:1.8,pointRadius:0,fill:false},
+  {label:'Golden Cross',data:gcNavs,borderColor:'#FF9800',borderDash:[6,3],borderWidth:1.8,pointRadius:0,fill:false},
+]},{...xy(v=>'$'+v.toLocaleString())});
+
+mk('pnlChart','bar',{labels,datasets:[{label:'P&L',data:pnls,
+  backgroundColor:pnls.map(v=>v>=0?'rgba(102,187,106,0.85)':'rgba(239,83,80,0.85)'),borderRadius:3}]},
+{plugins:{legend:{display:false}},...xy(v=>'$'+v.toLocaleString())});
+
+mk('cumRetChart','line',{labels,datasets:[
+  {label:'MINLP',data:cumRet,borderColor:'#2196F3',backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2,pointRadius:1.5,fill:true,tension:0.3},
+  {label:'SPY',data:spyCumRet,borderColor:'#90A4AE',borderDash:[3,3],borderWidth:1.5,pointRadius:0,fill:false},
+]},{...xy(v=>v.toFixed(1)+'%')});
+
+mk('drawdownChart','line',{labels,datasets:[{label:'Drawdown',data:drawdown,
+  borderColor:'#EF5350',backgroundColor:'rgba(239,83,80,0.15)',borderWidth:2,pointRadius:0,fill:true,tension:0.3}]},
+{plugins:{legend:{display:false}},...xy(v=>v.toFixed(1)+'%')});
+
+mk('retChart','bar',{labels,datasets:[{label:'Return %',data:rets,
+  backgroundColor:rets.map(v=>v>=0?'rgba(102,187,106,0.85)':'rgba(239,83,80,0.85)'),borderRadius:3}]},
+{plugins:{legend:{display:false}},...xy(v=>v.toFixed(2)+'%')});
+
+mk('sharpeChart','line',{labels,datasets:[{label:'Sharpe',data:sharps,
+  borderColor:'#64B5F6',backgroundColor:'rgba(100,181,246,0.1)',borderWidth:2,pointRadius:2,fill:true,tension:0.3}]},
+{plugins:{legend:{display:false}},...xy(v=>v.toFixed(2))});
+
+mk('riskChart','line',{labels,datasets:[{label:'Variance x10k',data:risks,
+  borderColor:'#CE93D8',backgroundColor:'rgba(206,147,216,0.1)',borderWidth:2,pointRadius:1.5,fill:true,tension:0.3}]},
+{plugins:{legend:{display:false}},...xy(v=>v.toFixed(3))});
+
+mk('heldChart','bar',{labels,datasets:[{label:'Stocks',data:held,
+  backgroundColor:'rgba(100,181,246,0.75)',borderRadius:3}]},
+{plugins:{legend:{display:false}},scales:{x:{ticks:F,grid:G},y:{min:0,max:12,ticks:{...F,stepSize:2},grid:G}}});
+
+mk('slipChart','bar',{labels,datasets:[{label:'Slippage',data:slip,
+  backgroundColor:'rgba(255,152,0,0.75)',borderRadius:3}]},
+{plugins:{legend:{display:false}},...xy(v=>'$'+v.toFixed(0))});
+
+mk('sectorStackChart','line',{labels,datasets:[
+  {label:'Technology',data:secTech,borderColor:'#2196F3',backgroundColor:'#2196F355',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Healthcare', data:secHcare,borderColor:'#F44336',backgroundColor:'#F4433655',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Utilities',  data:secUtil, borderColor:'#9C27B0',backgroundColor:'#9C27B055',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Energy',     data:secEnerg,borderColor:'#FF9800',backgroundColor:'#FF980055',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+  {label:'Industrials',data:secIndus,borderColor:'#4CAF50',backgroundColor:'#4CAF5055',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+]},{scales:{x:{ticks:F,grid:G},y:{stacked:false,min:0,max:100,ticks:{...F,callback:v=>v+'%'},grid:G}}});
+
+mk('sectorDoughnut','doughnut',{
+  labels:['Technology','Healthcare','Utilities','Energy','Industrials'],
+  datasets:[{data:avgSecW,backgroundColor:['#2196F3','#F44336','#9C27B0','#FF9800','#4CAF50'],
+    borderColor:'#0f1117',borderWidth:2}]},
+{plugins:{legend:{position:'right',labels:{color:'#e0e0e0',boxWidth:14}}}});
+
+mk('freqChart','bar',{labels:freqLabels,datasets:[{label:'Days Selected',data:freqCounts,
+  backgroundColor:freqColours,borderRadius:4}]},
+{indexAxis:'y',plugins:{legend:{display:false}},
+  scales:{x:{ticks:{...F,stepSize:1},grid:G},y:{ticks:F,grid:G}}});
+
+mk('estVsActChart','line',{labels,datasets:[
+  {label:'Actual Daily Return (%)',data:rets,borderColor:'#2196F3',backgroundColor:'rgba(33,150,243,0.08)',borderWidth:2,pointRadius:1.5,fill:true,tension:0.3},
+  {label:'Estimated Return (%)',data:estRet,borderColor:'#FF9800',borderDash:[4,3],borderWidth:1.5,pointRadius:0,fill:false},
+]},{...xy(v=>v.toFixed(2)+'%')});
+
+// Live holdings table
+async function fetchLivePrice(ticker){
+  try{
+    const t1=Math.floor((Date.now()/1000)-86400*5);
+    const t2=Math.floor(Date.now()/1000)+3600;
+    const r=await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&period1=${t1}&period2=${t2}`);
+    const d=await r.json();
+    const closes=d.chart.result[0].indicators.quote[0].close.filter(v=>v!==null);
+    return closes[closes.length-1]||null;
+  }catch(e){return null;}
+}
+
+async function updateHoldings(){
+  if(!holdings||!holdings.length){
+    document.getElementById('holdingsBody').innerHTML=
+      '<tr><td colspan="6" style="text-align:center;color:#90A4AE;padding:20px;">No holdings data</td></tr>';
+    return;
+  }
+  const rows=await Promise.all(holdings.map(async h=>{
+    const live=await fetchLivePrice(h.ticker);
+    const val=live?(live*h.value/h.weight*100/100):(h.value||0);
+    const sc=SC[h.sector]||'#90A4AE';
+    return `<tr>
+      <td><strong>${h.ticker}</strong></td>
+      <td><span class="badge" style="background:${sc}22;color:${sc}">${h.sector}</span></td>
+      <td>${h.weight.toFixed(1)}%</td>
+      <td>${live?'$'+live.toFixed(2):'<span style="color:#546E7A">market closed</span>'}</td>
+      <td>$${h.value.toLocaleString('en-US',{maximumFractionDigits:0})}</td>
+      <td><span style="color:#546E7A">—</span></td>
+    </tr>`;
+  }));
+  document.getElementById('holdingsBody').innerHTML=rows.join('');
+}
+updateHoldings();
+setInterval(()=>{
+  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const h=et.getHours(),m=et.getMinutes(),dow=et.getDay();
+  if(dow>=1&&dow<=5&&(h>9||(h===9&&m>=30))&&h<16)updateHoldings();
+},60000);
+</script>
+</body>
+</html>
