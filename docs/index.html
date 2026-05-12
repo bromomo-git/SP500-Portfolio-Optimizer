@@ -7,42 +7,95 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e0e0e0;padding:20px;}
-nav{display:flex;gap:12px;margin-bottom:20px;}
-nav a{background:#1e2130;color:#64B5F6;padding:8px 18px;border-radius:8px;text-decoration:none;font-size:0.82rem;border:1px solid #2196F322;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:#0f1117;color:#e0e0e0;padding:20px;min-height:100vh;}
+.wrap{max-width:1280px;margin:0 auto;width:100%;}
+nav{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;}
+nav a{background:#1e2130;color:#64B5F6;padding:8px 18px;border-radius:8px;
+  text-decoration:none;font-size:0.82rem;border:1px solid #2196F322;transition:all 0.2s;}
+nav a:hover{background:#252840;}
 nav a.active{background:#2196F3;color:#fff;border-color:#2196F3;}
-h1{font-size:1.55rem;color:#64B5F6;margin-bottom:4px;}
-.sub{color:#90A4AE;font-size:0.80rem;margin-bottom:22px;}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:11px;margin-bottom:26px;}
-.kpi{background:#1e2130;border-radius:10px;padding:15px;border-left:4px solid #2196F3;}
-.kpi .lbl{font-size:0.67rem;color:#90A4AE;text-transform:uppercase;letter-spacing:.5px;}
-.kpi .val{font-size:1.3rem;font-weight:700;margin-top:3px;}
+h1{font-size:1.45rem;color:#64B5F6;margin-bottom:4px;}
+.sub{color:#90A4AE;font-size:0.78rem;margin-bottom:22px;line-height:1.6;}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+  gap:10px;margin-bottom:26px;}
+.kpi{background:#1e2130;border-radius:10px;padding:14px;border-left:4px solid #2196F3;}
+.kpi .lbl{font-size:0.64rem;color:#90A4AE;text-transform:uppercase;letter-spacing:.5px;}
+.kpi .val{font-size:1.25rem;font-weight:700;margin-top:3px;}
 .pos{color:#66BB6A;}.neg{color:#EF5350;}.neu{color:#64B5F6;}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
 .full{grid-column:1/-1;}
 .card{background:#1e2130;border-radius:12px;padding:16px;}
-.card h3{font-size:0.75rem;color:#90A4AE;margin-bottom:11px;text-transform:uppercase;letter-spacing:.5px;}
-.cw{position:relative;height:220px;}.cw.t{height:290px;}.cw.m{height:250px;}
-.sec-label{font-size:0.70rem;color:#90A4AE;text-transform:uppercase;letter-spacing:1px;
+.card h3{font-size:0.72rem;color:#90A4AE;margin-bottom:10px;
+  text-transform:uppercase;letter-spacing:.5px;line-height:1.4;}
+.cw{position:relative;height:210px;}.cw.t{height:280px;}.cw.m{height:240px;}
+.sec-label{font-size:0.68rem;color:#90A4AE;text-transform:uppercase;letter-spacing:1px;
   margin:22px 0 10px 2px;border-left:3px solid #2196F3;padding-left:8px;}
-table{width:100%;border-collapse:collapse;font-size:0.82rem;}
-thead th{padding:8px 12px;text-align:left;color:#90A4AE;font-size:0.67rem;
-  text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #2a2d3e;}
-tbody td{padding:9px 12px;border-bottom:1px solid #1a1d2e;}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+table{width:100%;border-collapse:collapse;font-size:0.80rem;min-width:420px;}
+thead th{padding:8px 12px;text-align:left;color:#90A4AE;font-size:0.64rem;
+  text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #2a2d3e;
+  white-space:nowrap;}
+tbody td{padding:8px 12px;border-bottom:1px solid #1a1d2e;white-space:nowrap;}
 tbody tr:hover{background:#252840;}
-.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:0.72rem;font-weight:600;}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;
+  font-size:0.70rem;font-weight:600;}
 .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
   background:#66BB6A;margin-right:6px;animation:pulse 2s infinite;}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
-footer{text-align:center;color:#546E7A;font-size:0.70rem;margin-top:24px;}
-a{color:#64B5F6;}
+footer{text-align:center;color:#546E7A;font-size:0.68rem;margin-top:24px;
+  padding-top:16px;border-top:1px solid #1e2130;}
+a{color:#64B5F6;text-decoration:none;}
+
+/* Ticker feed */
+.ticker-bar{background:#141720;border-top:1px solid #1e2130;border-bottom:1px solid #1e2130;
+  overflow:hidden;padding:0;margin-bottom:20px;position:relative;height:36px;}
+.ticker-bar::before,.ticker-bar::after{content:'';position:absolute;top:0;width:60px;height:100%;
+  z-index:2;pointer-events:none;}
+.ticker-bar::before{left:0;background:linear-gradient(to right,#141720,transparent);}
+.ticker-bar::after{right:0;background:linear-gradient(to left,#141720,transparent);}
+.ticker-track{display:flex;gap:0;white-space:nowrap;animation:scroll-ticker 60s linear infinite;
+  align-items:center;height:36px;}
+.ticker-track:hover{animation-play-state:paused;}
+.ticker-item{display:inline-flex;align-items:center;gap:6px;padding:0 18px;
+  font-size:0.78rem;font-weight:600;border-right:1px solid #1e2130;height:36px;}
+.ticker-symbol{color:#e0e0e0;}
+.ticker-price{color:#90A4AE;font-size:0.72rem;}
+.ticker-chg.up{color:#66BB6A;}
+.ticker-chg.dn{color:#EF5350;}
+.ticker-chg.flat{color:#90A4AE;}
+.ticker-label{font-size:0.62rem;color:#546E7A;text-transform:uppercase;
+  letter-spacing:1px;padding:0 18px;border-right:1px solid #1e2130;height:36px;
+  display:inline-flex;align-items:center;}
+@keyframes scroll-ticker{
+  0%{transform:translateX(0);}
+  100%{transform:translateX(-50%);}
+}
+@media(max-width:700px){
+  .grid{grid-template-columns:1fr;}
+  .full{grid-column:1;}
+  .kpis{grid-template-columns:repeat(2,1fr);}
+  h1{font-size:1.2rem;}
+  .cw{height:180px;}.cw.t{height:220px;}.cw.m{height:200px;}
+  body{padding:12px;}
+}
 </style>
 </head>
 <body>
+<div class="wrap">
 <nav>
   <a href="index.html" class="active">&#x1F4C8; Dashboard</a>
   <a href="trades.html">&#x1F4CB; Trade History</a>
 </nav>
+
+<!-- Live Ticker Feed -->
+<div class="ticker-bar">
+  <div class="ticker-track" id="tickerTrack">
+    <span class="ticker-label">&#x1F4C8; Live Markets</span>
+    <span class="ticker-item"><span class="ticker-symbol">Loading...</span></span>
+  </div>
+</div>
+
 <h1>&#x1F4C8; SP500 MINLP Portfolio Optimizer</h1>
 <p class="sub">Updated: <strong>2026-05-12</strong> &nbsp;|&nbsp; $1,000,000 starting capital &nbsp;|&nbsp; 10 stocks/day &nbsp;|&nbsp; 5 sectors &nbsp;|&nbsp; 45-day rolling window &nbsp;|&nbsp; Risk multiplier: <strong>1.25&times;</strong></p>
 <div class="kpis"><div class="kpi"><div class="lbl">Current NAV</div><div class="val neu">$1,325,116</div></div>
@@ -61,7 +114,7 @@ a{color:#64B5F6;}
     <span style="color:#546E7A;font-weight:400;font-size:0.70rem;">
     &nbsp;Refreshes every 60s during market hours</span>
   </h3>
-  <table>
+  <div class="tbl-wrap"><table>
     <thead><tr>
       <th>Ticker</th><th>Sector</th><th>Weight</th>
       <th>Live Price</th><th>Value</th><th>Day P&amp;L</th>
@@ -70,7 +123,7 @@ a{color:#64B5F6;}
       <tr><td colspan="6" style="text-align:center;color:#90A4AE;padding:20px;">
         Fetching live prices...</td></tr>
     </tbody>
-  </table>
+  </table></div>
 </div>
 
 <div class="sec-label">&#x1F4C9; Performance vs Benchmarks &mdash; Comparative Analysis</div>
@@ -126,6 +179,7 @@ a{color:#64B5F6;}
   <a href="https://github.com/bromomo-git/SP500-Portfolio-Optimizer">GitHub</a>
   &nbsp;|&nbsp; <a href="trades.html">Trade History &rarr;</a>
 </footer>
+</div>
 
 <script>
 const G={color:'rgba(255,255,255,0.06)'};
@@ -266,6 +320,81 @@ setInterval(()=>{
   const h=et.getHours(),m=et.getMinutes(),dow=et.getDay();
   if(dow>=1&&dow<=5&&(h>9||(h===9&&m>=30))&&h<16)updateHoldings();
 },60000);
+
+// ── Live Ticker Feed ──────────────────────────────────────────
+// Uses the last day's held tickers + top frequency tickers for the feed
+const FEED_TICKERS = [
+  // Current holdings first
+  ...holdings.map(h=>h.ticker),
+  // Then top frequent tickers from the model
+  ...freqLabels.filter(t=>!holdings.map(h=>h.ticker).includes(t))
+].slice(0,40);
+
+async function fetchTickerData(tickers){
+  const results = [];
+  // Fetch in small groups to avoid rate limiting
+  for(let i=0;i<tickers.length;i+=10){
+    const group = tickers.slice(i,i+10);
+    await Promise.all(group.map(async ticker=>{
+      try{
+        const t1=Math.floor((Date.now()/1000)-86400*3);
+        const t2=Math.floor(Date.now()/1000)+3600;
+        const r=await fetch(
+          `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&period1=${t1}&period2=${t2}`
+        );
+        const d=await r.json();
+        const res=d.chart.result[0];
+        const q=res.indicators.quote[0];
+        const closes=q.close.filter(v=>v!==null);
+        const opens=q.open.filter(v=>v!==null);
+        if(closes.length>=2){
+          const prev=closes[closes.length-2];
+          const curr=closes[closes.length-1];
+          const chg=((curr-prev)/prev*100);
+          results.push({ticker,price:curr,chg,up:chg>=0});
+        } else if(closes.length===1){
+          results.push({ticker,price:closes[0],chg:0,up:true});
+        }
+      }catch(e){}
+    }));
+    if(i+10<tickers.length) await new Promise(r=>setTimeout(r,500));
+  }
+  return results;
+}
+
+function buildTickerHTML(data){
+  if(!data.length) return '<span class="ticker-item"><span class="ticker-symbol">Market data unavailable</span></span>';
+  // Duplicate for seamless scroll loop
+  const items = [...data,...data];
+  return '<span class="ticker-label">&#x1F4C8; SP500 MINLP</span>' +
+    items.map(d=>`
+      <span class="ticker-item">
+        <span class="ticker-symbol">${d.ticker}</span>
+        <span class="ticker-price">$${d.price.toFixed(2)}</span>
+        <span class="ticker-chg ${d.up?'up':'dn'}">${d.up?'▲':'▼'}${Math.abs(d.chg).toFixed(2)}%</span>
+      </span>`
+    ).join('');
+}
+
+async function loadTicker(){
+  if(!FEED_TICKERS.length) return;
+  const data = await fetchTickerData(FEED_TICKERS);
+  if(data.length){
+    document.getElementById('tickerTrack').innerHTML = buildTickerHTML(data);
+    // Adjust animation speed based on number of items
+    const track = document.getElementById('tickerTrack');
+    const speed = Math.max(30, data.length * 3);
+    track.style.animationDuration = speed + 's';
+  }
+}
+
+// Load ticker on start, refresh every 5 minutes during market hours
+loadTicker();
+setInterval(()=>{
+  const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const h=et.getHours(),m=et.getMinutes(),dow=et.getDay();
+  if(dow>=1&&dow<=5&&(h>9||(h===9&&m>=30))&&h<16) loadTicker();
+},5*60*1000);
 </script>
 </body>
 </html>
